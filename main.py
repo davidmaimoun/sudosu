@@ -32,7 +32,7 @@ from utils.printer import (
 )
 from utils.logger   import get_logger, make_session_log_path
 from utils.reporter import build_report, save_json, save_html
-from core           import file_analyzer, hash_checker, process_watcher, network_monitor, log_auditor
+from core           import file_analyzer, hash_checker, process_watcher, network_monitor, log_auditor, firewall_advisor
 
 VERSION = "0.1.0"
 
@@ -257,6 +257,15 @@ def run_scan(args: argparse.Namespace, os_name: str, log_file: Path | None = Non
         net_findings = network_monitor.run(log_file, args.verbose)
         findings += net_findings
         print_success(f"Net Monitor     → {len(net_findings)} finding(s)")
+
+    # ── Module 6 : Firewall Advisor ──────────────────────────────────
+    # Reçoit TOUS les findings des modules précédents pour corréler.
+    # Toujours exécuté en mode full ou network, jamais seul.
+    if args.mode in ("network", "full"):
+        print_info("[ FW Advisor     ] Analyzing firewall config + generating rules...")
+        fw_findings = firewall_advisor.run(findings, log_file, args.verbose)
+        findings += fw_findings
+        print_success(f"FW Advisor      → {len(fw_findings)} recommendation(s)")
 
     # ── Module 5 : Log Auditor ───────────────────────────────────────
     if args.mode in ("logs", "full"):
