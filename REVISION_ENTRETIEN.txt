@@ -1,0 +1,584 @@
+═══════════════════════════════════════════════════════════════════════════════
+  SUDOSU — GUIDE DE RÉVISION ENTRETIEN CYBER
+  "Ce que j'ai construit, pourquoi, et ce que j'ai appris"
+═══════════════════════════════════════════════════════════════════════════════
+
+  Format : Question probable du recruteur → Ta réponse storytellée
+  Objectif : impressionner par la maîtrise technique ET la pédagogie
+
+───────────────────────────────────────────────────────────────────────────────
+  INTRO — LE PITCH EN 30 SECONDES
+───────────────────────────────────────────────────────────────────────────────
+
+  "J'ai construit SudoSu — un scanner de sécurité Linux en Python pur, 
+   entièrement modulaire. Il fait ce qu'un analyste SOC ferait manuellement 
+   en plusieurs heures : analyser les fichiers suspects, vérifier les hashes 
+   contre VirusTotal, surveiller les processus via /proc, détecter les 
+   connexions C2 dans /proc/net/tcp, auditer auth.log pour le brute force SSH,
+   et enfin générer des règles iptables contextuelles basées sur tout ce qu'il
+   a trouvé. Il produit un rapport JSON hashé SHA256 pour la chaîne de preuve,
+   et un rapport HTML standalone prêt à présenter à un client."
+
+  Pourquoi ça impressionne :
+    → Vocabulaire pro : IOC, C2, chain of custody, SIEM, SOC, FIM
+    → Architecture pensée : modulaire, parallélisé, sans dépendances inutiles
+    → Profondeur technique : tu lis /proc directement comme le kernel
+
+
+───────────────────────────────────────────────────────────────────────────────
+  STEP 1 — CLI + AFFICHAGE (main.py + printer.py)
+───────────────────────────────────────────────────────────────────────────────
+
+  LA QUESTION :
+  "Pourquoi tu as commencé par l'interface CLI plutôt que par la logique métier ?"
+
+  TA RÉPONSE :
+  "Parce qu'en sécurité, un outil que personne ne comprend est un outil qu'on
+   n'utilise pas — et pire, qu'on utilise mal. J'ai voulu que l'architecture 
+   visuelle reflète l'architecture technique dès le départ.
+
+   Concrètement : tout l'affichage passe par un seul fichier, printer.py.
+   Pas un seul print() ailleurs dans le code. Pourquoi ? Parce que ça me 
+   permet de changer toute l'UI en modifiant un seul endroit. C'est le 
+   principe Single Responsibility appliqué à l'affichage.
+
+   La palette de couleurs a une sémantique : rouge = CRITICAL, jaune = 
+   WARNING, vert = OK. Exactement comme un SIEM — Splunk, Elastic, QRadar
+   — colorent leurs alertes. Un analyste SOC qui ouvre SudoSu reconnaît
+   immédiatement les codes visuels.
+
+   Le banner affiche l'heure en UTC. Pas par esthétique — en forensic, 
+   l'heure de lancement fait partie de la chaîne de preuve. Si un incident 
+   implique des serveurs à Tel Aviv, Paris et New York, des logs en heure 
+   locale deviennent un casse-tête. UTC est le standard universel."
+
+  MOT-CLÉ À PLACER : "Single Responsibility Principle", "SIEM", "UTC"
+
+  DÉTAIL TECHNIQUE :
+  argparse avec --mode quick/files/network/processes/logs/full.
+  Chaque mode active un sous-ensemble de modules — exactement comme nmap 
+  a -sS, -sV, -A... Un outil cyber sérieux a des modes parce que scanner 
+  / vs juste /tmp n'a pas le même coût et le même risque.
+
+
+───────────────────────────────────────────────────────────────────────────────
+  STEP 2 — LOGGING + RAPPORT (logger.py + reporter.py)
+───────────────────────────────────────────────────────────────────────────────
+
+  LA QUESTION :
+  "Pourquoi tes logs sont en UTC et pourquoi tu hashes le rapport ?"
+
+  TA RÉPONSE SUR LES LOGS :
+  "Le logger crée un fichier .log horodaté pour chaque session. Chaque ligne
+   indique son module d'origine — file_analyzer, network_monitor, etc. — ce 
+   qui permet de faire grep 'CRITICAL' session.log ou de filtrer par module.
+   C'est exactement ce que font les SIEM avec leurs index structurés.
+
+   L'heure est en UTC parce qu'en investigation forensic multi-pays, une 
+   heure locale n'a aucune valeur. Si un attaquant agit depuis un serveur 
+   en Europe de l'Est à 23h heure locale, et que la victime est en Californie,
+   les logs en fuseaux différents créent des incohérences. UTC efface ce 
+   problème. C'est le standard de l'industrie — RSyslog, Splunk, Elastic 
+   travaillent tous en UTC."
+
+  TA RÉPONSE SUR LE HASH DU RAPPORT :
+  "Le rapport JSON inclut son propre hash SHA256 dans meta.report_hash.
+   C'est le concept de chain of custody — chaîne de preuve en forensic légal.
+   Si le rapport est présenté en justice ou à un client, on peut prouver 
+   qu'il n'a pas été modifié après sa génération en recomputant le hash.
+
+   Mais — et c'est la nuance que j'ai mise dans le code — si un attaquant 
+   a accès root ET peut modifier le fichier, il peut recalculer le hash.
+   La vraie solution pro : signer avec GPG (clé privée que l'attaquant n'a 
+   pas), ou déposer le hash chez un tiers via horodatage RFC 3161. C'est 
+   ce que font les forensic investigators certifiés."
+
+  MOT-CLÉ À PLACER : "chain of custody", "UTC", "RFC 3161", "GPG"
+
+  DÉTAIL TECHNIQUE :
+  reporter.py génère deux formats :
+  - JSON : machine-readable, intégrable dans un pipeline CI/CD ou SIEM
+  - HTML : standalone, CSS inline, aucune dépendance, ouvrable hors ligne.
+    Pourquoi CSS inline ? Parce qu'un rapport de sécurité doit être 
+    archivable 5 ans et rester lisible. C'est ce que font Nessus et Burp Suite.
+
+
+───────────────────────────────────────────────────────────────────────────────
+  STEP 3 — FILE ANALYZER (file_analyzer.py + patterns.py)
+───────────────────────────────────────────────────────────────────────────────
+
+  LA QUESTION :
+  "Comment tu détectes un fichier malveillant sans l'exécuter ?"
+
+  TA RÉPONSE :
+  "C'est de l'analyse statique — examiner un fichier sans l'exécuter.
+   À l'opposé de l'analyse dynamique qui l'exécute dans un sandbox.
+   L'avantage : aucun risque d'infection. La limite : un malware très 
+   obfusqué peut passer entre les mailles.
+
+   J'applique 7 heuristiques en cascade, dans l'ordre du moins cher 
+   au plus cher en termes de ressources. C'est une règle d'optimisation 
+   fondamentale : on fait un lookup O(1) sur un set avant de lire un fichier.
+
+   1. Nom suspect : lookup dans un set — 'mimikatz', 'c99.php', 'beacon'...
+   2. Double extension : 'rapport.pdf.sh' s'affiche comme PDF dans 
+      l'explorateur mais s'exécute comme shell. Technique classique de 
+      phishing utilisée dans des milliers de campagnes APT.
+   3. Extension dangereuse dans dossier world-writable : un .sh dans /tmp
+      n'est pas forcément malveillant, mais c'est un IOC.
+   4. SUID bit : si un fichier appartient à root et a le bit SUID, n'importe 
+      quel utilisateur l'exécute avec des droits root. Technique de privilege 
+      escalation #1 listée sur GTFObins.
+   5. World-writable : un script modifiable par tout le monde et appelé 
+      par un cron root = Remote Code Execution garanti.
+   6. Modification récente d'un fichier système : /etc/passwd modifié à 
+      3h du matin → backdoor probable.
+   7. Patterns YARA-like : je lis les 8 premiers Ko en bytes bruts et 
+      j'applique des regex compilées — eval(base64_decode, bash -i >& /dev/tcp,
+      AKIA[0-9A-Z]{16} pour les clés AWS hardcodées...
+
+   Pourquoi 8 Ko seulement ? Les malwares mettent leur payload en en-tête.
+   Sur 50 000 fichiers, lire 8 Ko vs le fichier entier = performance x1000."
+
+  MOT-CLÉ À PLACER : "analyse statique", "YARA", "IOC", "SUID", "GTFObins"
+
+  SI LE RECRUTEUR CREUSE SUR YARA :
+  "YARA est le standard de l'industrie pour les signatures de malwares.
+   Kaspersky, VirusTotal, les CERT nationaux publient leurs règles YARA.
+   SudoSu en implémente une version simplifiée en Python pur — des regex 
+   compilées sur les bytes bruts des fichiers. Un vrai déploiement 
+   production utiliserait le binding Python de YARA (yara-python) pour 
+   les performances et la compatibilité avec les règles communautaires."
+
+  DÉTAIL TECHNIQUE SUR LA PARALLÉLISATION :
+  ThreadPoolExecutor avec 8 workers. Pourquoi threads et pas processes ?
+  Parce que l'analyse de fichiers est I/O-bound (lecture disque), pas 
+  CPU-bound. Le GIL Python ne pose pas problème pour les tâches I/O-bound.
+  Pour du CPU-bound (calcul cryptographique), on utiliserait ProcessPoolExecutor.
+  as_completed() retourne les résultats au fil de l'eau — on affiche les 
+  findings en temps réel, pas en attendant la fin du scan.
+
+
+───────────────────────────────────────────────────────────────────────────────
+  STEP 4 — HASH CHECKER (hash_checker.py)
+───────────────────────────────────────────────────────────────────────────────
+
+  LA QUESTION :
+  "Pourquoi SHA256 et pas MD5 ? Et si l'attaquant modifie le fichier, 
+   il change le hash aussi, non ?"
+
+  TA RÉPONSE SUR SHA256 vs MD5 :
+  "MD5 est cryptographiquement cassé depuis 2004, quand les chercheuses 
+   Wang Xiaoyun et Yu Hongbo ont publié une attaque de collision.
+   Concrètement : il est possible de créer deux fichiers DIFFÉRENTS avec 
+   le même MD5. Un attaquant peut donc créer un malware qui a le même 
+   MD5 qu'un fichier légitime connu — et contourner la détection par hash.
+
+   SHA256 n'a pas de collision connue. La résistance aux collisions est 
+   de 2^128 — computationnellement infaisable avec la technologie actuelle.
+   SHA512 est encore plus fort mais trop lent pour scanner des milliers de 
+   fichiers. SHA256 est le meilleur compromis sécurité/performance.
+
+   VirusTotal accepte MD5, SHA1 ET SHA256 pour rétrocompatibilité — 
+   mais leurs analyses internes utilisent SHA256."
+
+  TA RÉPONSE SUR LA MODIFICATION DU FICHIER :
+  "Excellente question — c'est LA nuance que la plupart des devs ratent.
+   Le hash sert à DEUX choses complètement différentes :
+
+   USAGE 1 — Identification (Threat Intelligence) :
+   Je calcule le SHA256 d'un fichier inconnu et je le compare à VirusTotal.
+   Si le hash est dans la base → malware CONFIRMÉ, peu importe le nom 
+   du fichier. Un malware renommé 'setup.exe' garde le même hash — 
+   c'est son identité cryptographique immuable.
+
+   USAGE 2 — Intégrité (File Integrity Monitoring) :
+   Je hash /bin/ls à T0 (système propre) → je stocke 'aabbcc...'.
+   Après une intrusion suspectée, je rehash → 'ff1234...'. 
+   Différent → ALERTE : le binaire a été remplacé par un trojan binary.
+   C'est exactement ce que font AIDE, Tripwire, Wazuh — les outils FIM 
+   de référence en entreprise.
+
+   Oui, si l'attaquant peut modifier le fichier de baseline, il peut 
+   recalculer le hash. La vraie protection : stocker la baseline sur un 
+   système externe en read-only, signer avec GPG, ou utiliser un TPM 
+   (Trusted Platform Module) — puce matérielle qui stocke les mesures 
+   d'intégrité et qu'on ne peut pas falsifier logiciellement."
+
+  MOT-CLÉ À PLACER : "collision MD5", "FIM", "TPM", "AIDE/Tripwire/Wazuh"
+
+  DÉTAIL TECHNIQUE SUR LE STREAMING :
+  hashlib.sha256() en chunks de 4 Mo. Pourquoi pas charger le fichier entier ?
+  Un fichier de 2 Go en RAM d'un coup = Out Of Memory. Le streaming maintient 
+  une empreinte mémoire constante. L'effet avalanche de SHA256 garantit que 
+  le résultat est identique qu'on hash en une fois ou en 1000 chunks.
+
+
+───────────────────────────────────────────────────────────────────────────────
+  STEP 5 — PROCESS WATCHER (process_watcher.py)
+───────────────────────────────────────────────────────────────────────────────
+
+  LA QUESTION :
+  "Comment tu surveilles les processus sans utiliser ps ou psutil ?"
+
+  TA RÉPONSE :
+  "Je lis /proc directement. C'est un pseudo-filesystem — il n'existe pas 
+   sur disque, le kernel le génère à la volée en RAM. Pour chaque processus 
+   actif, /proc/<PID>/ contient :
+     - status  → nom, PID, PPID, UID réel, UID effectif
+     - cmdline → la commande complète avec arguments (séparés par \x00)
+     - exe     → symlink vers le vrai binaire exécuté
+
+   Pourquoi pas ps ou psutil ? Deux raisons.
+   Un : un rootkit avancé peut hooker les syscalls utilisés par ps pour 
+   cacher des processus. /proc est plus difficile à falsifier sans patcher 
+   le kernel lui-même.
+   Deux : psutil est une dépendance externe. En forensic sur un système 
+   compromis, moins de dépendances = moins de surface d'attaque sur l'outil 
+   lui-même. SudoSu n'a qu'une dépendance : rich pour l'affichage."
+
+  SUR LA DÉTECTION FILELESS :
+  "La technique fileless est l'une des plus vicieuses. Le malware se lance, 
+   puis SUPPRIME son propre exécutable du disque. Il continue de tourner en 
+   RAM mais est invisible pour find, ls, et tout scanner de fichiers.
+
+   Sur Linux, 'supprimer' un fichier = décrémenter son compteur d'inode.
+   Tant qu'un processus le tient ouvert en mémoire, le contenu reste 
+   accessible. Quand tous les file descriptors sont fermés → libération réelle.
+
+   Détection : /proc/<PID>/exe contient '(deleted)' dans son chemin.
+   Le kernel le marque lui-même. C'est la seule façon de voir ce processus 
+   — aucune trace sur disque. Favori des APT pour le post-exploitation."
+
+  SUR LA PRIVILEGE ESCALATION :
+  "Chaque processus Linux a un UID réel (qui l'a lancé) et un UID effectif 
+   (avec quels droits il tourne). Normalement ils sont égaux.
+
+   Exception : fichiers SUID (Set User ID). Quand Alice lance sudo, son 
+   process a UID=1000 mais EUID=0 — parce que /usr/bin/sudo appartient à 
+   root et a le bit SUID. C'est conçu et légitime.
+
+   Ce qui n'est PAS légitime : un processus nommé 'kworker' ou 'systemd-tmp' 
+   avec UID=1000 et EUID=0. Un attaquant a exploité un binaire SUID vulnérable 
+   (buffer overflow, path injection...) et son process hérite de EUID=0.
+   Je détecte exactement ça : UID > 0 + EUID = 0 + nom hors whitelist → CRITICAL."
+
+  SUR LE WEBSHELL :
+  "L'arbre de processus normal : apache2 → apache2_worker.
+   L'arbre suspect : apache2 → php → bash.
+   Ce bash enfant d'apache est un webshell qui vient d'être activé 
+   via une requête HTTP. L'attaquant a uploadé un fichier PHP malveillant, 
+   l'a appelé depuis son navigateur, et PHP a exécuté system('bash -c ...').
+   Je lis le PPID de chaque shell, remonte au parent, et vérifie si c'est 
+   un serveur web. Si oui → CRITICAL, webshell actif confirmé."
+
+  MOT-CLÉ À PLACER : "/proc", "fileless malware", "SUID", "webshell", "PPID"
+
+
+───────────────────────────────────────────────────────────────────────────────
+  STEP 6 — NETWORK MONITOR (network_monitor.py)
+───────────────────────────────────────────────────────────────────────────────
+
+  LA QUESTION :
+  "Tu m'expliques comment tu détectes des connexions réseau sans netstat ?"
+
+  TA RÉPONSE :
+  "Je parse /proc/net/tcp — le fichier que netstat et ss lisent en interne.
+   En court-circuitant ces outils, je suis plus robuste : un rootkit peut 
+   remplacer netstat par une version qui cache certaines connexions, mais 
+   falsifier /proc/net/tcp nécessite de patcher le kernel.
+
+   Le format du fichier est intéressant : les IPs sont stockées en hexadécimal
+   little-endian. L'IP 127.0.0.1 s'écrit '0100007F' dans le fichier.
+   Pourquoi ? Les processeurs x86 sont little-endian — ils stockent l'octet 
+   de poids faible en premier. 0x7F=127, 0x00=0, 0x00=0, 0x01=1 → inversé.
+   J'utilise struct.pack + socket.htonl pour la conversion.
+
+   L'état de la connexion est aussi en hex : 0A = LISTEN, 01 = ESTABLISHED.
+   Quand je vois un état LISTEN sur le port 4444 → CRITICAL, c'est le port 
+   par défaut de Metasploit Meterpreter."
+
+  SUR C2 ET REVERSE SHELL :
+  "C2 = Command & Control. Le malware maintient une connexion persistante 
+   vers un serveur contrôlé par l'attaquant. Il y reçoit des ordres et 
+   exfiltre des données.
+
+   Pourquoi les attaquants font des connexions SORTANTES plutôt qu'entrants ?
+   Parce que les firewalls bloquent généralement l'entrant, mais laissent 
+   passer l'HTTP/HTTPS sortant. Un reverse shell fait une connexion sortante 
+   vers le C2 — il traverse les NAT et firewalls sans problème.
+
+   Les ports C2 que je détecte sont les valeurs par défaut des frameworks 
+   offensifs : 4444 pour Metasploit, 9001 pour Cobalt Strike, 1337 et 31337
+   par tradition hacker depuis les années 90. Un attaquant débutant ne 
+   change pas ces defaults."
+
+  SUR DGA :
+  "Quand je trouve une connexion vers une IP externe suspecte, je fais un 
+   reverse DNS. Les malwares sophistiqués utilisent des DGA — Domain Generation 
+   Algorithm. Au lieu d'un C2 fixe (facile à blacklister), le malware génère 
+   des milliers de domaines aléatoires selon une formule secrète. L'attaquant 
+   enregistre UN de ces domaines — le malware le trouvera.
+   Un nom de domaine de 8 caractères aléatoires sur une IP inconnue → IOC fort."
+
+  MOT-CLÉ À PLACER : "/proc/net/tcp", "little-endian", "C2", "DGA", "reverse shell"
+
+
+───────────────────────────────────────────────────────────────────────────────
+  STEP 7 — LOG AUDITOR (log_auditor.py)
+───────────────────────────────────────────────────────────────────────────────
+
+  LA QUESTION :
+  "Comment tu distingues un brute force d'un simple utilisateur qui 
+   tape son mot de passe trois fois de travers ?"
+
+  TA RÉPONSE :
+  "C'est exactement la question qui illustre pourquoi les SIEM existent.
+   Ligne par ligne, un échec SSH est banal. C'est la CORRÉLATION TEMPORELLE 
+   — l'agrégation de tous les événements — qui révèle l'attaque.
+
+   Je lis toutes les lignes d'auth.log d'abord, sans décider. Puis j'agrège 
+   avec un defaultdict : IP → nombre d'échecs. Si une IP dépasse 10 échecs,
+   c'est un brute force. Si ce seuil est atteint ET qu'un 'Accepted password' 
+   suit depuis la même IP → CRITICAL, brute force réussi, compromission probable.
+
+   C'est exactement la logique d'une règle de corrélation Splunk :
+   'si count(Failed password) from same src_ip > 10 in 5 minutes → alert'.
+   Sauf que je travaille sur les fichiers bruts, pas sur un index SIEM.
+
+   La nuance entre brute force classique et distribué : le classique 
+   vient d'une seule IP — facile à détecter par agrégation. Le distribué 
+   utilise un botnet avec une IP différente par tentative — là il faut de 
+   la corrélation temporelle pure (N tentatives dans la même fenêtre de temps 
+   sur le même compte) et du machine learning pour les anomalies. C'est 
+   le niveau des SIEM avec ML comme Elastic SIEM ou Microsoft Sentinel."
+
+  SUR L'ANTI-FORENSIC :
+  "L'ironie parfaite en forensic : si auth.log est vide, c'est lui-même 
+   un IOC. Un système actif avec SSH exposé a FORCÉMENT des lignes dans 
+   auth.log — des connexions légitimes, des échecs occasionnels...
+   Un fichier vide = 'cat /dev/null > /var/log/auth.log' exécuté par 
+   l'attaquant pour effacer ses traces.
+
+   Je vérifie donc la TAILLE des fichiers de log. Moins de 512 octets pour 
+   auth.log sur un système actif → suspect.
+
+   La vraie protection contre l'anti-forensic : envoyer les logs en temps 
+   réel vers un SIEM distant (rsyslog → Splunk ou Elastic). L'attaquant 
+   efface le local, mais le SIEM distant est intact."
+
+  SUR LES ROOTKITS LKM :
+  "Un LKM rootkit — Loadable Kernel Module malveillant — s'exécute au niveau 
+   du kernel avec des droits absolus. Il peut hooker les syscalls pour cacher 
+   des fichiers (getdents pour 'ls'), des processus (/proc pour 'ps'), et des 
+   connexions réseau. Exemples connus : Diamorphine, Reptile, Azazel, Necro.
+
+   La seule trace dans les logs : une ligne dans kern.log lors du chargement 
+   — 'Loading module: evil_rootkit' via insmod. Après ça, le rootkit peut 
+   se cacher lui-même. Je détecte la fenêtre de vulnérabilité : le moment 
+   du chargement, avant que le rootkit soit pleinement actif."
+
+  MOT-CLÉ À PLACER : "corrélation temporelle", "SIEM", "anti-forensic", 
+                      "LKM rootkit", "chain of custody"
+
+
+───────────────────────────────────────────────────────────────────────────────
+  STEP 8 — FIREWALL ADVISOR (firewall_advisor.py)
+───────────────────────────────────────────────────────────────────────────────
+
+  LA QUESTION :
+  "Pourquoi ton outil ne bloque pas lui-même les connexions suspectes 
+   qu'il trouve ?"
+
+  TA RÉPONSE :
+  "Parce qu'un outil qui touche iptables sans confirmation explicite peut 
+   couper l'accès SSH à un serveur distant — brick complet, intervention 
+   physique requise. Le principe de moindre surprise : SudoSu propose, 
+   l'administrateur décide. C'est exactement la philosophie de fail2ban 
+   en mode 'dryrun', ou de Wazuh en mode 'report-only'.
+
+   Ce qui est intéressant dans ce module, c'est la corrélation multi-sources.
+   Le firewall_advisor est le seul module qui reçoit les findings de TOUS 
+   les autres modules. Il peut donc :
+   - Prendre l'IP attaquante détectée par log_auditor (brute force SSH)
+     et générer une règle ipset pour la bloquer
+   - Prendre le port C2 détecté par network_monitor (4444 en LISTEN)
+     et générer fuser -k 4444/tcp + règles iptables DROP
+   - Détecter qu'un reverse shell a été trouvé et recommander l'egress 
+     filtering complet — politique OUTPUT DROP avec whitelist des ports légitimes
+
+   C'est du SOAR en miniature : Security Orchestration Automation and 
+   Response. En production, c'est ce que font Palo Alto XSOAR ou Splunk SOAR
+   — corréler des alertes de sources différentes pour générer des playbooks 
+   de réponse automatisés."
+
+  SUR DEFAULT DENY vs DEFAULT ALLOW :
+  "La plupart des serveurs Linux ont iptables installé mais avec policy 
+   INPUT ACCEPT partout. C'est du default-allow — une blocklist. Tu bloques 
+   ce que tu connais de mauvais, mais un attaquant connaît des milliers de 
+   techniques que tu n'as pas encore bloquées.
+
+   Default-deny renverse la logique : policy INPUT DROP, et tu n'autorises 
+   QUE ce qui est nécessaire. Surface d'attaque minimale. C'est le Least 
+   Privilege appliqué au réseau — exactement le même principe qu'un compte 
+   Linux non-root ou des permissions S3 restrictives."
+
+  SUR L'EGRESS FILTERING :
+  "La quasi-totalité des admins ne filtrent que l'INPUT. L'OUTPUT est laissé 
+   ACCEPT — et les reverse shells passent librement.
+   
+   Egress filtering = limiter ce que la machine peut initier comme connexions 
+   sortantes. En pratique : OUTPUT DROP, puis autoriser seulement 443 (HTTPS), 
+   80 (HTTP), 53 (DNS UDP), 22 (SSH). Tout le reste → DROP.
+   Un reverse shell qui essaie de se connecter sur le port 4444 → bloqué."
+
+  SUR IPSET vs IPTABLES :
+  "Si je dois bloquer 1000 IPs attaquantes, faire 1000 règles iptables = 
+   1000 règles traversées SÉQUENTIELLEMENT pour chaque paquet. O(N).
+   
+   ipset utilise une hash table interne : O(1) — temps constant peu importe 
+   le nombre d'IPs. Pour bloquer des listes Tor exit nodes, des ranges de 
+   botnets connus, c'est la seule solution viable en production."
+
+  MOT-CLÉ À PLACER : "SOAR", "default-deny", "egress filtering", "Least Privilege",
+                      "ipset O(1)", "iptables O(N)"
+
+
+───────────────────────────────────────────────────────────────────────────────
+  QUESTIONS BONUS — ARCHITECTURE GLOBALE
+───────────────────────────────────────────────────────────────────────────────
+
+  Q : "Quelle est la différence entre ton outil et un antivirus classique ?"
+
+  R : "Un antivirus classique travaille en temps réel et se concentre sur 
+      la détection de malwares connus via signatures et heuristiques comportementales.
+      SudoSu est un scanner forensic post-incident — il analyse l'état d'un 
+      système à un instant T pour trouver des traces de compromission.
+      
+      Plus précisément :
+      - Un AV détecte en flux continu. SudoSu fait un snapshot.
+      - Un AV match des signatures virales propriétaires. SudoSu utilise 
+        des IOC et des heuristiques comportementales dans les logs et processus.
+      - Un AV protège en amont. SudoSu répond en aval (incident response).
+      
+      SudoSu est plus proche des outils EDR (Endpoint Detection & Response) 
+      comme CrowdStrike Falcon ou SentinelOne — qui eux aussi surveillent les 
+      processus, les connexions réseau, et les modifications de fichiers."
+
+  Q : "Tu parles de IOC, qu'est-ce que c'est exactement ?"
+
+  R : "IOC = Indicator of Compromise. Tout artefact observable qui indique 
+      une compromission potentielle. Ça peut être :
+      - Un hash SHA256 connu de malware
+      - Une IP ou un domaine C2 connu
+      - Un pattern dans un fichier (signature)
+      - Un comportement anormal (SUID inattendu, reverse shell)
+      - Une entrée de log suspecte
+      
+      Les IOC sont partagés entre organisations via des formats standards :
+      STIX 2.1 (Structured Threat Intelligence eXpression) et TAXII (le 
+      protocole de transport). Des plateformes comme MISP ou OpenCTI 
+      permettent de partager des IOC en temps réel entre CERTs."
+
+  Q : "Comment tu irais plus loin avec ce projet ?"
+
+  R : "Plusieurs directions :
+      
+      Technique :
+      - Intégrer les vraies règles YARA (yara-python) pour accéder aux 
+        milliers de règles communautaires publiées par les CERTs
+      - Ajouter un module CVE : checker les versions des paquets installés 
+        contre la NVD (National Vulnerability Database) de NIST
+      - Export STIX 2.1 pour partager les IOC trouvés avec d'autres équipes
+      - Mode daemon : surveillance continue avec alertes webhook Slack/Discord
+      
+      Architecture :
+      - Conteneuriser avec Docker pour l'isolation (un scanner de sécu 
+        doit être isolé pour ne pas être compromis lui-même)
+      - CI/CD : intégrer dans un pipeline GitHub Actions pour scanner 
+        automatiquement les nouveaux déploiements
+      
+      Opérationnel :
+      - Ajouter un mode 'compare' : comparer deux rapports avant/après 
+        un déploiement pour voir ce qui a changé
+      - Intégrer les listes de réputation IP (AbuseIPDB, Shodan via API)"
+
+
+───────────────────────────────────────────────────────────────────────────────
+  GLOSSAIRE ULTRA-RAPIDE — TERMS À AVOIR BOUT DES LÈVRES
+───────────────────────────────────────────────────────────────────────────────
+
+  IOC     → Indicator of Compromise : artefact révélateur d'une compromission
+  TTPs    → Tactics Techniques Procedures : la méthode d'un attaquant (MITRE ATT&CK)
+  APT     → Advanced Persistent Threat : attaquant étatique ou très sophistiqué
+  C2      → Command & Control : serveur de l'attaquant qui pilote le malware
+  SIEM    → Security Information & Event Management (Splunk, Elastic, QRadar)
+  SOAR    → Security Orchestration Automation Response (Palo Alto XSOAR)
+  EDR     → Endpoint Detection & Response (CrowdStrike, SentinelOne)
+  FIM     → File Integrity Monitoring (AIDE, Tripwire, Wazuh)
+  SOC     → Security Operations Center (l'équipe qui surveille les alertes)
+  DFIR    → Digital Forensics & Incident Response
+  YARA    → Yet Another Ridiculous Acronym : moteur de règles pour malwares
+  LKM     → Loadable Kernel Module (rootkits kernel : Diamorphine, Reptile)
+  DGA     → Domain Generation Algorithm (domaines C2 aléatoires)
+  SUID    → Set User ID bit (privilege escalation via binaires SUID root)
+  GTFObins→ Liste des binaires SUID exploitables (gtfobins.github.io)
+  PAM     → Pluggable Authentication Modules (couche auth Linux)
+  CVE     → Common Vulnerabilities & Exposures (catalogue de vulnérabilités)
+  CVSS    → Common Vulnerability Scoring System (score de sévérité 0-10)
+  NVD     → National Vulnerability Database (NIST)
+  STIX    → Structured Threat Intelligence eXpression (format partage IOC)
+  MITRE   → Framework de référence des TTPs offensives (attack.mitre.org)
+  TPM     → Trusted Platform Module (puce matérielle d'intégrité)
+  Chain of custody → Chaîne de preuve forensic (intégrité des preuves)
+
+
+───────────────────────────────────────────────────────────────────────────────
+  CHEAT SHEET — CE QUE LIT SUDOSU vs CE QUE LIT L'ADMIN CLASSIQUE
+───────────────────────────────────────────────────────────────────────────────
+
+  Fichier/Source          SudoSu               Admin classique
+  ─────────────────────────────────────────────────────────────
+  Processus         /proc/<PID>/status     ps aux
+  Connexions réseau /proc/net/tcp          netstat -tulnp
+  Ports en écoute   /proc/net/tcp          ss -tlnp
+  Auth & SSH        /var/log/auth.log      last, lastb
+  Sudo              /var/log/auth.log      journalctl _COMM=sudo
+  Kernel            /var/log/kern.log      dmesg
+  Modules kernel    /var/log/kern.log      lsmod
+  Cron              /var/log/cron.log      crontab -l -u <user>
+  Pare-feu          iptables -L -n -v      ufw status
+  Hash fichiers     hashlib.sha256()       md5sum, sha256sum
+  Threat intel      VirusTotal API         ---
+
+  La différence : SudoSu lit les sources primaires (kernel, /proc, logs bruts).
+  Un attaquant peut hooker les commandes. Les sources primaires, beaucoup plus dur.
+
+
+───────────────────────────────────────────────────────────────────────────────
+  DERNIÈRE SLIDE — CE QUI IMPRESSIONNE UN RECRUTEUR CYBER
+───────────────────────────────────────────────────────────────────────────────
+
+  ✓  Tu lis /proc directement — tu comprends le kernel Linux
+  ✓  Tu décode le little-endian de /proc/net/tcp — tu sais ce que les outils font en interne
+  ✓  Tu expliques la nuance MD5 cassé vs SHA256 — tu connais la cryptographie appliquée
+  ✓  Tu différencies analyse statique vs dynamique — tu penses comme un malware analyst
+  ✓  Tu mentionnes GTFObins, MITRE ATT&CK, YARA — tu connais les ressources de référence
+  ✓  Tu expliques pourquoi l'outil NE modifie PAS le système — tu penses risque opérationnel
+  ✓  Tu proposes d'aller plus loin avec STIX 2.1, yara-python — tu montres une vision
+  ✓  Tu parles de chain of custody — tu comprends les enjeux légaux du forensic
+
+  Ce que tu NE dis PAS :
+  ✗  "c'est comme un antivirus" (trop vague)
+  ✗  "ça détecte les virus" (trop simpliste)
+  ✗  "j'ai utilisé ChatGPT pour coder ça" (inutile)
+
+  Ce que tu DIS :
+  ✓  "c'est un outil de forensic et de threat detection post-incident"
+  ✓  "il corrèle les événements de plusieurs sources comme le ferait un analyste SOC"
+  ✓  "j'ai voulu comprendre ce que les outils font en interne, pas juste les appeler"
+
+═══════════════════════════════════════════════════════════════════════════════
+  Bonne chance. Tu as construit quelque chose de solide.
+  Le code parle pour toi — laisse-le parler.
+═══════════════════════════════════════════════════════════════════════════════
