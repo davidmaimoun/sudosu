@@ -137,8 +137,21 @@ CONTENT_PATTERNS: list[tuple[str, re.Pattern, str]] = [
         "MEDIUM",
     ),
     (
+        # Fix : PAS de IGNORECASE — une vraie clé AWS est TOUJOURS en majuscules.
+        # IGNORECASE provoquait des faux positifs sur des séquences biologiques
+        # (FASTA, protéines) qui contiennent AKIA par coïncidence dans leur séquence.
+        #
+        # On exige maintenant un CONTEXTE : la clé doit être assignée à une variable.
+        # Ex valide   : aws_access_key_id = "AKIAIOSFODNN7EXAMPLE"
+        # Ex invalide : ...FIQQMRTHPELRDFPISGIGGIETWEDAAEFLLLGA... (séquence FASTA)
+        #
+        # AWS Key ID format officiel :
+        #   AKIA ou ASIA (STS temp token) + 16 chars [A-Z0-9] MAJUSCULES UNIQUEMENT
         "hardcoded_aws_key",
-        re.compile(rb"AKIA[0-9A-Z]{16}", re.IGNORECASE),
+        re.compile(
+            rb"(?:aws_access_key_id|AWS_ACCESS_KEY_ID|AccessKeyId"
+            rb"|access_key|['\"])\s*[=:]\s*['\"]?(AKIA|ASIA)[A-Z0-9]{16}['\"]?",
+        ),
         "HIGH",
     ),
     (
