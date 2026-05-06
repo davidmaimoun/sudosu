@@ -1,7 +1,7 @@
 # ⬡ SudoSu
 ### *Security Unified Defense & Offensive Scanning Utility*
 
-> **Un scanner de sécurité Linux modulaire, écrit en Python pur.**  
+> **A modular Linux security scanner written in pure Python.**  
 > Forensic · Threat Detection · Firewall Advisory · Report Generation
 
 ```
@@ -18,38 +18,38 @@
 
 ---
 
-## Table des matières
+## Table of Contents
 
-- [Vue d'ensemble](#vue-densemble)
+- [Overview](#overview)
 - [Architecture](#architecture)
 - [Installation](#installation)
 - [Usage](#usage)
 - [Modules](#modules)
-- [Exemples de sorties](#exemples-de-sorties)
-- [Concepts cyber couverts](#concepts-cyber-couverts)
+- [Sample Output](#sample-output)
+- [Cyber Concepts Covered](#cyber-concepts-covered)
 - [Roadmap](#roadmap)
 
 ---
 
-## Vue d'ensemble
+## Overview
 
-SudoSu est un outil d'audit de sécurité conçu pour détecter des compromissions sur un système Linux. Il combine plusieurs techniques utilisées par les professionnels de la sécurité offensive et défensive : analyse statique de fichiers, surveillance des processus, monitoring réseau, audit de logs, et génération de règles pare-feu contextuelles.
+SudoSu is a post-incident forensic and threat detection tool for Linux systems. It replicates what a SOC analyst does manually over several hours — scanning suspicious files, verifying hashes against VirusTotal, monitoring live processes through `/proc`, detecting C2 connections in `/proc/net/tcp`, auditing `auth.log` for brute force patterns, and generating contextual firewall rules from everything it finds.
 
-**Ce que SudoSu fait :**
+**What SudoSu does:**
 
-- Scanne les fichiers à la recherche d'IOC (Indicators of Compromise) : extensions dangereuses, permissions SUID, patterns YARA-like, malwares fileless
-- Vérifie les hashes SHA256 contre VirusTotal (70+ moteurs antivirus)
-- Surveille les processus via `/proc` pour détecter les privilege escalations, webshells actifs, et reverse shells
-- Lit `/proc/net/tcp` directement pour trouver des ports C2 et connexions suspectes
-- Parse `auth.log` pour détecter le brute force SSH, les root logins, et les mouvements latéraux
-- Génère des règles `iptables`/`ipset` contextuelles basées sur les menaces détectées
-- Produit un rapport `report_<timestamp>.json` hashé SHA256 + rapport HTML standalone
+- Scans files for IOCs: dangerous extensions, SUID bits, YARA-like content patterns, fileless malware indicators
+- Verifies SHA256 hashes against VirusTotal (70+ antivirus engines)
+- Monitors processes via `/proc` to detect privilege escalations, active webshells, and reverse shells
+- Reads `/proc/net/tcp` directly — no `netstat`, no external dependencies
+- Parses `auth.log` for SSH brute force, root logins, sudo abuse, and LKM rootkit loading
+- Generates contextual `iptables`/`ipset` rules based on what other modules found
+- Produces a SHA256-signed `report_<timestamp>.json` + a self-contained HTML report
 
-**Ce que SudoSu ne fait PAS :**
+**What SudoSu does NOT do:**
 
-- Il ne modifie jamais le système (lecture seule, sauf écriture des rapports)
-- Il ne supprime aucun fichier
-- Il n'applique jamais de règles pare-feu sans confirmation explicite
+- Never modifies the system (read-only, except writing reports)
+- Never deletes any file
+- Never applies firewall rules without explicit human confirmation
 
 ---
 
@@ -57,337 +57,343 @@ SudoSu est un outil d'audit de sécurité conçu pour détecter des compromissio
 
 ```
 sudosu/
-├── main.py                   # Point d'entrée CLI (argparse)
+├── main.py                   # CLI entry point (argparse)
 ├── requirements.txt
 │
 ├── config/
-│   └── patterns.py           # Base de signatures IOC (YARA-like)
+│   └── patterns.py           # IOC signature base (YARA-like rules)
 │
 ├── core/
-│   ├── file_analyzer.py      # Analyse statique fichiers + permissions
+│   ├── file_analyzer.py      # Static file analysis + permission checks
 │   ├── hash_checker.py       # SHA256 + VirusTotal API + FIM baseline
-│   ├── process_watcher.py    # Surveillance /proc — PIDs, UIDs, fileless
+│   ├── process_watcher.py    # /proc monitoring — PIDs, UIDs, fileless
 │   ├── network_monitor.py    # /proc/net/tcp — ports, C2, reverse shells
 │   ├── log_auditor.py        # auth.log, syslog, kern.log, cron.log
-│   └── firewall_advisor.py   # Analyse iptables + règles recommandées
+│   └── firewall_advisor.py   # iptables analysis + recommended rules
 │
 ├── utils/
-│   ├── printer.py            # Affichage Rich (couleurs, tableaux, progress)
-│   ├── logger.py             # Logging UTC structuré par module
-│   └── reporter.py           # Export JSON (hashé SHA256) + HTML standalone
+│   ├── printer.py            # Rich display (colors, tables, progress bars)
+│   ├── logger.py             # Structured UTC logging per module
+│   └── reporter.py           # JSON (SHA256-signed) + standalone HTML export
 │
-├── reports/                  # Rapports générés (report_<timestamp>.json/html)
-└── logs/                     # Logs de session (securescope_<timestamp>.log)
+├── reports/                  # Generated reports  →  report_<timestamp>.json / .html
+└── logs/                     # Session logs       →  securescope_<timestamp>.log
 ```
 
-### Pipeline d'exécution
+### Execution Pipeline
 
 ```
 main.py
   │
-  ├─► file_analyzer   →  findings[]  ─────────────────────────┐
-  │                                                            │
-  ├─► hash_checker    →  enrichit findings[] avec SHA256/VT   │
-  │                                                            │
-  ├─► process_watcher →  findings[]  ─────────────────────────┤
-  │                                                            │
-  ├─► network_monitor →  findings[]  ─────────────────────────┤
-  │                                                            │
-  ├─► log_auditor     →  findings[]  ─────────────────────────┤
-  │                                                            ▼
-  ├─► firewall_advisor ◄── corrèle TOUS les findings  →  recommandations
+  ├─► file_analyzer   →  findings[]  ──────────────────────────┐
+  │                                                             │
+  ├─► hash_checker    →  enriches findings[] with SHA256 / VT  │
+  │                                                             │
+  ├─► process_watcher →  findings[]  ──────────────────────────┤
+  │                                                             │
+  ├─► network_monitor →  findings[]  ──────────────────────────┤
+  │                                                             │
+  ├─► log_auditor     →  findings[]  ──────────────────────────┤
+  │                                                             ▼
+  ├─► firewall_advisor ◄── correlates ALL findings  →  rules + recommendations
   │
   └─► reporter  →  report_<timestamp>.json + .html
       logger    →  logs/securescope_<timestamp>.log
 ```
+
+Each module feeds the next. The `firewall_advisor` is the only module that receives findings from **all** previous modules, enabling cross-source correlation — the same principle used by SOAR platforms.
 
 ---
 
 ## Installation
 
 ```bash
-# Cloner le projet
+# Clone
 git clone https://github.com/yourhandle/sudosu.git
 cd sudosu
 
-# Installer les dépendances (une seule : rich)
+# Install the single dependency
 pip install -r requirements.txt
 
-# Optionnel : clé API VirusTotal (gratuit sur virustotal.com)
-export VT_API_KEY="votre_clé_ici"
+# Optional: VirusTotal API key (free at virustotal.com)
+export VT_API_KEY="your_key_here"
 ```
 
-**Dépendances :**
+**Requirements:**
 - Python 3.10+
-- `rich` >= 13.7.0 (affichage terminal)
-- Accès root recommandé pour lire `/proc/<PID>/exe` et `/var/log/auth.log`
+- `rich` >= 13.7.0 — the only external dependency
+- Root access recommended to read `/proc/<PID>/exe` and `/var/log/auth.log`
 
 ---
 
 ## Usage
 
 ```bash
-# Scan rapide du répertoire home
+# Quick scan — file analysis only, fast
 python main.py --target /home --mode quick
 
-# Analyse complète avec rapport HTML
+# Full scan with HTML report
 python main.py --target / --mode full --output html
 
-# Scan des fichiers uniquement (+ VirusTotal si clé dispo)
+# Files + VirusTotal hash lookup
 python main.py --target /tmp --mode files --verbose
 
-# Surveillance réseau + conseils pare-feu
+# Network surveillance + firewall advisory
 python main.py --target / --mode network --output json
 
-# Audit des logs système
+# System log audit (auth.log, syslog, kern.log, cron)
 python main.py --target / --mode logs --verbose
 
-# Test sans rien écrire (dry-run)
+# Dry run — scan without writing anything to disk
 python main.py --target /var/www --mode full --dry-run
 
-# Forcer le mode Windows (cross-platform)
-python main.py --target C:\Users --mode files --os windows
+# Cross-platform: force Windows mode
+python main.py --target "C:\Users" --mode files --os windows
 ```
 
-### Référence des arguments
+### Arguments
 
-| Argument | Valeurs | Description |
-|----------|---------|-------------|
-| `--target` / `-t` | chemin | Répertoire cible (défaut : `/`) |
-| `--mode` / `-m` | `quick` `files` `network` `processes` `logs` `full` | Mode de scan |
-| `--output` / `-o` | `json` `html` `txt` | Format du rapport |
-| `--depth` / `-d` | entier | Profondeur max de récursion (défaut : 5) |
-| `--verbose` / `-v` | flag | Affichage détaillé |
-| `--dry-run` | flag | Scan sans écriture de rapport |
-| `--os` | `linux` `windows` | Forcer le mode OS |
+| Argument | Values | Description |
+|----------|--------|-------------|
+| `--target` / `-t` | path | Root directory to scan (default: `/`) |
+| `--mode` / `-m` | `quick` `files` `network` `processes` `logs` `full` | Scan scope |
+| `--output` / `-o` | `json` `html` `txt` | Report format |
+| `--depth` / `-d` | integer | Max recursion depth (default: 5) |
+| `--verbose` / `-v` | flag | Detailed output per file/process |
+| `--dry-run` | flag | Analyze without writing reports or logs |
+| `--os` | `linux` `windows` | Override OS detection |
 
-### Modes expliqués
+### Scan Modes
 
-| Mode | Modules actifs | Durée estimée |
-|------|----------------|---------------|
-| `quick` | file_analyzer uniquement | ~5-30s |
-| `files` | file_analyzer + hash_checker (VT) | ~1-5min |
+| Mode | Active Modules | Estimated Duration |
+|------|---------------|--------------------|
+| `quick` | file_analyzer only | ~5–30s |
+| `files` | file_analyzer + hash_checker | ~1–5min |
 | `processes` | process_watcher | ~5s |
 | `network` | network_monitor + firewall_advisor | ~10s |
 | `logs` | log_auditor | ~15s |
-| `full` | tous les modules | ~5-15min |
+| `full` | all modules in sequence | ~5–15min |
 
 ---
 
 ## Modules
 
-### 🔍 file_analyzer — Analyse statique de fichiers
+### 🔍 file_analyzer — Static File Analysis
 
-Parcourt récursivement le répertoire cible et applique 7 heuristiques en cascade, du moins cher au plus cher :
+Walks the target directory recursively and applies **7 heuristics in cascade**, ordered from cheapest to most expensive — a key performance principle when analyzing thousands of files.
 
-1. **Nom suspect** — `mimikatz`, `c99.php`, `beacon`, `meterpreter`...
-2. **Double extension** — `rapport.pdf.sh`, `facture.doc.exe` (camouflage)
-3. **Extension dangereuse** — `.sh`, `.php`, `.py` dans `/tmp`, `/dev/shm`
-4. **Emplacement à risque** — `/tmp`, `/dev/shm`, `/var/tmp` (world-writable)
-5. **Permissions SUID/world-writable** — privilege escalation et RCE
-6. **Modification récente** — fichier système touché dans les dernières 24h
-7. **Patterns YARA-like** — regex sur les 8 premiers Ko du fichier
+| # | Heuristic | Example |
+|---|-----------|---------|
+| 1 | Suspicious filename | `mimikatz`, `c99.php`, `beacon`, `meterpreter` |
+| 2 | Double extension | `report.pdf.sh` displays as PDF, runs as shell |
+| 3 | Dangerous extension in risky dir | `.sh` in `/tmp`, `.php` in `/dev/shm` |
+| 4 | High-risk directory | `/tmp`, `/dev/shm`, `/var/tmp` (world-writable) |
+| 5 | SUID bit or world-writable | Privilege escalation / RCE vector |
+| 6 | Critical system file recently modified | `/etc/passwd` touched at 3am |
+| 7 | YARA-like content pattern | `eval(base64_decode`, `bash -i >& /dev/tcp/`, AWS keys |
 
-Patterns détectés : reverse shells bash/python/perl/nc, webshells PHP (`eval(base64_decode`), credentials hardcodés, clés AWS/RSA privées, obfuscation base64.
+Content scanning reads only the **first 8 KB** of each file in raw bytes. Malware typically places its payload header at the start — scanning 8 KB instead of entire files gives a ~1000x performance gain across large directories.
 
-Parallélisé avec `concurrent.futures.ThreadPoolExecutor` (8 threads).  
-Filtre anti-bruit : minimum 2 IOC convergents pour sévérité MEDIUM.
-
----
-
-### #️⃣ hash_checker — Empreinte cryptographique + Threat Intel
-
-**Usage 1 — Identification :**  
-Calcule le SHA256 de chaque fichier suspect et l'envoie à l'API VirusTotal. Si le hash est connu de 70+ antivirus → malware confirmé.
-
-**Usage 2 — Intégrité (FIM) :**  
-Compare les binaires système (`/bin/ls`, `/sbin/init`...) contre une baseline T0. Si le hash diffère → trojan binary détecté (technique rootkit classique).
-
-- Lecture en streaming par chunks de 4 Mo (compatible fichiers volumineux)
-- Déduplication par hash (1 seule requête VT si même malware à plusieurs endroits)
-- Rate limiting respecté : 4 req/min sur l'API gratuite VirusTotal
-- Hash envoyé, jamais le fichier lui-même (confidentialité)
+Parallelized with `ThreadPoolExecutor` (8 workers, I/O-bound tasks).  
+Anti-noise filter: at least 2 convergent IOCs required for a MEDIUM severity finding.
 
 ---
 
-### 👁 process_watcher — Surveillance des processus via /proc
+### #️⃣ hash_checker — Cryptographic Fingerprinting + Threat Intel
 
-Lit directement `/proc/<PID>/status`, `/proc/<PID>/cmdline`, `/proc/<PID>/exe` pour chaque processus actif.
+Two distinct uses of cryptographic hashing:
 
-Détections :
-- **Privilege escalation** : `UID > 0` mais `EUID = 0` avec processus hors whitelist
-- **Malware fileless** : `/proc/<PID>/exe` contient `(deleted)` — exécutable supprimé du disque mais toujours en RAM
-- **Webshell actif** : shell (`bash`, `sh`) enfant d'un serveur web (`apache`, `nginx`, `php`)
-- **Outils offensifs** : `mimikatz`, `meterpreter`, `sliver`, `chisel`... dans le nom ou la cmdline
-- **Cmdline obfusquée** : `base64 -d`, `eval(__import__`, `bash -i >&`, `/dev/tcp/`
-- **Shell orphelin** : `PPID=1` + shell interactif → reverse shell détaché
+**Identification** — SHA256 of a suspicious file is sent to VirusTotal. If 70+ AV engines recognize it → confirmed malware, regardless of filename or location.
 
----
+**File Integrity Monitoring (FIM)** — SHA256 system binaries at T0 (clean state). At T1, rehash and compare. A different hash on `/bin/ls` means a trojan binary replaced the real one — the classic rootkit technique.
 
-### 🌐 network_monitor — Surveillance réseau sans outil externe
-
-Parse `/proc/net/tcp` et `/proc/net/tcp6` directement. Décode les adresses IP en little-endian (format natif kernel x86).
-
-Détections :
-- **Ports C2 connus** : 4444 (Meterpreter), 1337, 31337, 9001 (Cobalt Strike)...
-- **Bind shell** : port inhabituel en état `LISTEN` avec processus = shell
-- **Reverse shell** : connexion `ESTABLISHED` vers IP publique sur port non-standard
-- **Port 0** : socket RAW ou anomalie kernel (possible injection réseau)
-
-Résolution DNS inverse des IPs distantes pour détecter les domaines DGA (Domain Generation Algorithm).
+- Streamed in 4 MB chunks — handles large files without memory pressure
+- Hash deduplication: same malware dropped in multiple locations → one VT request
+- Rate limiting: respects VirusTotal's 4 req/min free tier
+- Only the hash is sent — the file content stays on the machine (privacy)
 
 ---
 
-### 📋 log_auditor — Forensic des logs système
+### 👁 process_watcher — Live Process Surveillance via /proc
 
-Lit `auth.log`/`secure`, `syslog`/`messages`, `kern.log`, `cron.log`. Support des fichiers `.gz` (rotation). Fallback `journalctl` si fichiers texte absents.
+Reads `/proc/<PID>/status`, `/proc/<PID>/cmdline`, and `/proc/<PID>/exe` for every active PID — no `ps`, no `psutil`.
 
-Détections avec **corrélation temporelle** (agrégation multi-lignes) :
-- **Brute force SSH** : > 10 échecs depuis même IP → `CRITICAL` si login réussi après
-- **User enumeration** : > 5 usernames invalides tentés depuis même IP
-- **Root login direct** : `Accepted password for root from X.X.X.X`
-- **Sudo vers shell root** : `COMMAND=/bin/bash` dans les logs sudo
-- **LKM Rootkit** : chargement de module kernel non standard (`insmod`, `modprobe`)
-- **Persistence cron** : commandes cron avec `/tmp/`, `curl|sh`, `base64 -d`, reverse shells
-- **Anti-forensic** : fichier `auth.log` vide ou tronqué
+| Detection | Technique | Severity |
+|-----------|-----------|----------|
+| Privilege escalation | `UID > 0` but `EUID = 0`, process not in whitelist | CRITICAL |
+| Fileless malware | `/proc/<PID>/exe` ends with `(deleted)` | CRITICAL |
+| Active webshell | Shell process spawned by `apache`/`nginx`/`php` | CRITICAL |
+| Known offensive tool | `meterpreter`, `sliver`, `chisel`, `mimikatz` in name/cmdline | CRITICAL |
+| Obfuscated cmdline | `base64 -d`, `/dev/tcp/`, `bash -i >&`, `eval(__import__` | HIGH |
+| Orphan shell | `PPID=1` + interactive shell → detached reverse shell | HIGH |
 
----
-
-### 🛡 firewall_advisor — Analyse pare-feu + Règles contextuelles
-
-Détecte le pare-feu actif (nftables → iptables → ufw → firewalld) et analyse sa configuration.
-
-Analyse statique :
-- Absence totale de pare-feu → `CRITICAL`
-- Policy `INPUT ACCEPT` (default-allow) → `HIGH`
-- Policy `OUTPUT ACCEPT` (pas d'egress filtering) → `MEDIUM`
-- Règle `ESTABLISHED,RELATED` absente (stateful manquant) → `HIGH`
-
-**Corrélation intelligente avec les autres modules :**
-- IPs attaquantes (log_auditor) → règles `ipset` pour blocage O(1)
-- Ports C2 (network_monitor) → `fuser -k <port>/tcp` + règles DROP
-- Reverse shell détecté → recommandation egress filtering complet
-- Brute force SSH → rate limiting `--recent` + fail2ban
-
-Génère un script bash complet copier-coller avec commentaires.
+Why read `/proc` directly instead of using `ps`? A rootkit can hook the syscalls `ps` depends on to hide processes. `/proc` is significantly harder to falsify without patching the kernel itself.
 
 ---
 
-### 📊 reporter — Rapports forensic
+### 🌐 network_monitor — Network Surveillance Without External Tools
 
-**JSON** : rapport structuré avec métadonnées, résumé par sévérité, findings détaillés.  
-Le hash SHA256 du rapport lui-même est inclus dans `meta.report_hash` → chain of custody.
+Parses `/proc/net/tcp` and `/proc/net/tcp6` directly. Decodes IP addresses from x86 little-endian hex format — the same way `ss` and `netstat` work internally.
 
-**HTML** : rapport standalone (CSS inline, aucune dépendance externe), thème dark, filtrable par sévérité. Ouvrable hors ligne, archivable 5 ans.
+```
+0100007F:0035  →  hex decode + byte-swap  →  127.0.0.1:53
+```
+
+| Detection | Indicator | Severity |
+|-----------|-----------|----------|
+| Known C2 port | 4444 (Meterpreter), 9001 (Cobalt Strike), 1337, 31337 | CRITICAL |
+| Bind shell | Unusual port in LISTEN state | HIGH |
+| Reverse shell | ESTABLISHED to public IP on non-standard port | HIGH |
+| Raw socket anomaly | Local port = 0 on ESTABLISHED connection | MEDIUM |
+
+Performs reverse DNS on remote IPs to detect DGA domains (Domain Generation Algorithm) — random-looking hostnames used by malware to rotate C2 infrastructure.
 
 ---
 
-## Exemples de sorties
+### 📋 log_auditor — Log Forensics with Temporal Correlation
 
-### Rapport JSON (extrait)
+Reads `auth.log`/`secure`, `syslog`/`messages`, `kern.log`, `cron.log`. Handles `.gz` rotated files. Falls back to `journalctl` on systemd-only systems.
+
+Key principle: **individual log lines are meaningless in isolation**. A single failed SSH login is normal. 150 failures from the same IP, followed by a successful login, is a confirmed brute force attack. SudoSu aggregates with `defaultdict` counters across all lines before making decisions — the same logic as a SIEM correlation rule.
+
+| Detection | Source | Severity |
+|-----------|--------|----------|
+| SSH brute force (>10 failures / IP) | auth.log | HIGH → CRITICAL if login succeeds |
+| User enumeration (>5 invalid usernames / IP) | auth.log | MEDIUM |
+| Direct root SSH login | auth.log | HIGH |
+| Sudo to root shell (`COMMAND=/bin/bash`) | auth.log | HIGH |
+| LKM rootkit loaded | kern.log | HIGH |
+| Cron persistence (`curl\|sh`, `/tmp/`, `base64 -d`) | cron.log | HIGH–CRITICAL |
+| Anti-forensic: empty auth.log | filesystem | HIGH |
+
+---
+
+### 🛡 firewall_advisor — Firewall Analysis + Contextual Rules
+
+Detects the active firewall stack (nftables → iptables → ufw → firewalld) and audits its configuration.
+
+**Static analysis:**
+
+| Issue | Severity |
+|-------|----------|
+| No firewall detected | CRITICAL |
+| `INPUT ACCEPT` policy (default-allow) | HIGH |
+| `OUTPUT ACCEPT` (no egress filtering) | MEDIUM |
+| Missing `ESTABLISHED,RELATED` rule | HIGH |
+
+**Cross-module correlation** — the only module that reads findings from all previous modules:
+
+- Attacking IPs from `log_auditor` → `ipset` block rules (O(1) lookup)
+- C2 ports from `network_monitor` → `fuser -k <port>/tcp` + DROP rules
+- Reverse shell detected → full egress filtering ruleset
+- SSH brute force → `--recent` rate limiting + `fail2ban` recommendation
+
+All output is a **copy-paste ready bash script** with inline comments. SudoSu suggests — the admin decides.
+
+---
+
+### 📊 reporter — Forensic-Grade Report Generation
+
+**JSON** — structured report with metadata, per-severity summary, and full finding details.  
+`meta.report_hash` contains the SHA256 of the report itself → *chain of custody*: proves the report was not altered after generation.
+
+**HTML** — self-contained dark-themed report with inline CSS. No external dependencies, no CDN calls. Viewable offline, archivable for years — the same approach used by Nessus and Burp Suite.
+
+---
+
+## Sample Output
+
+### JSON Finding (excerpt)
 
 ```json
 {
-  "meta": {
-    "tool": "SudoSu v0.1.0",
-    "timestamp": "2026-05-04T09:54:44Z",
-    "os": "linux",
-    "target": "/tmp",
-    "mode": "full",
-    "report_hash": "sha256:a3f1c2d8..."
-  },
-  "summary": {
-    "total": 8,
-    "critical": 2,
-    "high": 4,
-    "medium": 1,
-    "low": 1
-  },
-  "findings": [
-    {
-      "severity": "CRITICAL",
-      "target": "/tmp/update.sh",
-      "reason": "Dangerous extension: .sh | Located in high-risk dir | Content pattern matched: reverse_shell_bash",
-      "module": "file_analyzer",
-      "details": {
-        "sha256": "24d004a1...",
-        "permissions": "-rwxr-xr-x",
-        "matched_patterns": ["reverse_shell_bash"],
-        "virustotal": {
-          "malicious": 58,
-          "total": 72,
-          "vt_permalink": "https://www.virustotal.com/gui/file/24d004a1..."
-        }
-      }
+  "severity": "CRITICAL",
+  "target": "/tmp/update.sh",
+  "reason": "Dangerous extension: .sh | High-risk dir /tmp | Pattern: reverse_shell_bash | SHA256: 24d004a1... [no VT key]",
+  "module": "file_analyzer",
+  "timestamp": "2026-05-04T09:54:45Z",
+  "details": {
+    "sha256": "24d004a104d4d54034dbcffc2a4b19a11f39008a575aa614ea04703480b1022c",
+    "permissions": "-rwxr-xr-x",
+    "owner": "root",
+    "modified_ago_hours": 1.3,
+    "matched_patterns": ["reverse_shell_bash"],
+    "virustotal": {
+      "malicious": 58,
+      "total": 72,
+      "name": "linux.backdoor.bashdoor",
+      "vt_permalink": "https://www.virustotal.com/gui/file/24d004a1..."
     }
-  ]
+  }
 }
 ```
 
-### Tableau de résultats (terminal)
+### Terminal Output (summary table)
 
 ```
-╔══════════╦═══════════════════════════════╦═══════════════════════════════════╗
-║ Severity ║ Path / Target                 ║ Reason                            ║
-╠══════════╬═══════════════════════════════╬═══════════════════════════════════╣
-║ CRITICAL ║ /tmp/update.sh                ║ reverse_shell_bash + high-risk    ║
-║ CRITICAL ║ Brute force from 185.220.x.x  ║ 150 fails → SUCCESSFUL LOGIN      ║
-║ HIGH     ║ /tmp/rapport.pdf.sh           ║ Double extension .pdf.sh          ║
-║ HIGH     ║ PID 1337 (bash)               ║ Shell child of nginx (webshell)   ║
-║ HIGH     ║ 0.0.0.0:4444 [LISTEN]         ║ Known C2 port (Meterpreter)       ║
-╚══════════╩═══════════════════════════════╩═══════════════════════════════════╝
+╔══════════╦══════════════════════════════════╦═════════════════════════════════════╗
+║ Severity ║ Path / Target                    ║ Reason                              ║
+╠══════════╬══════════════════════════════════╬═════════════════════════════════════╣
+║ CRITICAL ║ /tmp/update.sh                   ║ reverse_shell_bash + high-risk dir  ║
+║ CRITICAL ║ Brute force from 185.220.101.47  ║ 150 fails → SUCCESSFUL LOGIN        ║
+║ HIGH     ║ /tmp/report.pdf.sh               ║ Double extension detected: .pdf.sh  ║
+║ HIGH     ║ PID 1337 (bash)                  ║ Shell spawned by nginx (webshell)   ║
+║ HIGH     ║ 0.0.0.0:4444 [LISTEN]            ║ Known C2 port: Meterpreter default  ║
+║ HIGH     ║ /etc/passwd                      ║ Critical system file modified 2.1h  ║
+╚══════════╩══════════════════════════════════╩═════════════════════════════════════╝
 ```
 
 ---
 
-## Concepts cyber couverts
+## Cyber Concepts Covered
 
-| Concept | Module | Description |
-|---------|--------|-------------|
-| IOC (Indicator of Compromise) | file_analyzer | Artefacts révélateurs d'une compromission |
-| YARA rules | file_analyzer | Signatures de détection basées sur patterns |
-| SUID bit / Privilege Escalation | file_analyzer, process_watcher | UID réel ≠ UID effectif |
-| Malware fileless | process_watcher | Exécutable supprimé, toujours en RAM |
-| Webshell detection | process_watcher | Shell enfant d'un serveur web |
-| SHA256 / Chain of custody | hash_checker | Intégrité cryptographique |
-| File Integrity Monitoring (FIM) | hash_checker | Baseline + comparaison binaires |
-| VirusTotal Threat Intel | hash_checker | 70+ AV engines via API |
-| /proc filesystem | process_watcher, network_monitor | Interface directe kernel Linux |
-| Little-endian decoding | network_monitor | Décodage IPs /proc/net/tcp |
-| C2 (Command & Control) | network_monitor | Détection beacons et reverse shells |
-| Bind shell vs Reverse shell | network_monitor | Techniques d'accès distant |
-| DGA (Domain Generation Algorithm) | network_monitor | Domaines C2 aléatoires |
-| Brute force + corrélation temporelle | log_auditor | Agrégation multi-lignes |
-| PAM (Pluggable Auth Modules) | log_auditor | Couche d'abstraction auth Linux |
-| LKM Rootkit | log_auditor | Modules kernel malveillants |
-| Anti-forensic detection | log_auditor | Logs effacés/tronqués |
-| Default Deny policy | firewall_advisor | Blocklist vs allowlist |
-| Stateful firewall | firewall_advisor | ESTABLISHED,RELATED |
-| Egress filtering | firewall_advisor | Filtrage sortant contre reverse shells |
-| ipset O(1) vs iptables O(N) | firewall_advisor | Blocage efficace de listes d'IPs |
-| SOAR (Security Orchestration) | firewall_advisor | Corrélation multi-sources → réponse |
-| UTC logging / Chain of custody | logger, reporter | Traçabilité forensic internationale |
-| Report integrity hash | reporter | SHA256 du rapport lui-même |
+| Concept | Module | What it means |
+|---------|--------|----------------|
+| IOC (Indicator of Compromise) | file_analyzer | Observable artifact indicating a breach |
+| YARA-like rules | file_analyzer | Regex-based content signatures on raw bytes |
+| SUID / Privilege Escalation | file_analyzer, process_watcher | Real UID ≠ Effective UID |
+| Fileless malware | process_watcher | Executable deleted from disk, still in RAM |
+| Webshell detection | process_watcher | Shell spawned by a web server process |
+| SHA256 / Chain of custody | hash_checker | Cryptographic integrity proof |
+| File Integrity Monitoring (FIM) | hash_checker | Baseline T0 vs current state comparison |
+| VirusTotal Threat Intel | hash_checker | 70+ AV engines, hash-only query |
+| /proc filesystem | process_watcher, network_monitor | Direct kernel interface, no tool abstraction |
+| Little-endian IP decoding | network_monitor | Raw /proc/net/tcp format parsing |
+| C2 (Command & Control) | network_monitor | Attacker-controlled beacon infrastructure |
+| Bind shell vs Reverse shell | network_monitor | Two sides of remote access |
+| DGA (Domain Generation Algorithm) | network_monitor | Rotating C2 domains via algorithm |
+| Temporal correlation | log_auditor | Aggregating events to detect patterns |
+| PAM (Pluggable Auth Modules) | log_auditor | Linux authentication abstraction |
+| LKM Rootkit | log_auditor | Kernel-level malicious modules |
+| Anti-forensic detection | log_auditor | Empty/truncated log files as IOC |
+| Default Deny policy | firewall_advisor | Allowlist vs blocklist approach |
+| Stateful inspection | firewall_advisor | ESTABLISHED,RELATED connection tracking |
+| Egress filtering | firewall_advisor | Blocking outbound reverse shells |
+| ipset O(1) vs iptables O(N) | firewall_advisor | Hash-based vs linear IP matching |
+| SOAR correlation | firewall_advisor | Multi-source findings → automated response |
+| UTC logging | logger | Timezone-agnostic forensic traceability |
+| Report integrity hash | reporter | SHA256 of the report itself |
 
 ---
 
 ## Roadmap
 
-- [ ] `--baseline` : créer une baseline FIM des binaires système
-- [ ] `--compare` : comparer deux rapports (avant/après incident)
-- [ ] Module `vuln_scanner` : CVEs connus via NIST NVD API
-- [ ] Module `ssh_auditor` : analyse de `/etc/ssh/sshd_config`
-- [ ] Export STIX 2.1 (format standard partage de threat intel)
-- [ ] Intégration webhook Slack/Discord pour alertes temps réel
-- [ ] Mode daemon : surveillance continue avec alertes
+- [ ] `--baseline` — generate and save a FIM baseline of system binaries
+- [ ] `--compare` — diff two reports (before / after an incident)
+- [ ] `vuln_scanner` — check installed packages against NIST NVD CVEs
+- [ ] `ssh_auditor` — audit `/etc/ssh/sshd_config` for weak settings
+- [ ] STIX 2.1 export — share discovered IOCs in a standard format
+- [ ] Slack / Discord webhook — real-time alert integration
+- [ ] Daemon mode — continuous monitoring with configurable intervals
+- [ ] Docker packaging — isolated execution environment
 
 ---
 
-## Avertissement légal
+## Legal Disclaimer
 
-SudoSu est conçu pour l'audit de **vos propres systèmes** ou dans un cadre autorisé explicitement (pentest avec scope défini, bug bounty).  
-L'utilisation sur des systèmes sans autorisation est illégale dans la plupart des juridictions.  
-L'auteur décline toute responsabilité pour un usage malveillant.
+SudoSu is designed for auditing **your own systems** or within an explicitly authorized scope (defined pentest engagement, bug bounty program).  
+Using it against systems without written authorization is illegal in most jurisdictions.  
+The author assumes no liability for any misuse.
 
 ---
 
