@@ -1,7 +1,7 @@
 """
 utils/logger.py
 ---------------
-Logging structuré de SecureScope.
+Logging structuré de Sudosu.
 Chaque action du scan est tracée : dans la console ET dans un fichier .log.
 
 Concepts cyber :
@@ -10,7 +10,7 @@ Concepts cyber :
       · Persistants (fichier sur disque, pas juste console)
       · Structurés (niveau, message, contexte)
   - Un attaquant efface souvent les logs système (/var/log/).
-    SecureScope crée ses propres logs dans un dossier dédié.
+    Sudosu crée ses propres logs dans un dossier dédié.
   - Le niveau de log (DEBUG / INFO / WARNING / ERROR / CRITICAL)
     correspond exactement aux niveaux de sévérité d'un SIEM.
 
@@ -105,7 +105,7 @@ def get_logger(name: str, log_file: Path | None = None, verbose: bool = False) -
 def make_session_log_path(timestamp: str) -> Path:
     """
     Retourne le chemin du fichier log pour cette session.
-    Ex : logs/securescope_20260504_095444.log
+    Ex : logs/sudosu_20260504_095444.log
 
     Concept forensic :
       Chaque exécution produit son propre fichier log.
@@ -113,4 +113,4 @@ def make_session_log_path(timestamp: str) -> Path:
       → Préserve l'historique des investigations.
     """
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
-    return LOGS_DIR / f"securescope_{timestamp}.log"
+    return LOGS_DIR / f"sudosu_{timestamp}.log"

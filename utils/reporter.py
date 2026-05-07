@@ -1,46 +1,15 @@
 """
 utils/reporter.py
 -----------------
-Génération du rapport final de SecureScope.
-Produit un fichier  reports/report_<timestamp>.json  ET  .html
+Génération du rapport final de SudoSu.
+Produit reports/sudosu_report_<timestamp>.json  ET  .html
 
 Concepts cyber :
   - Un rapport de scan est un DOCUMENT LÉGAL en cas d'incident.
-    Il doit contenir : qui a lancé le scan, quand, sur quoi, avec quels résultats.
-  - Le format JSON est machine-readable → intégrable dans un SIEM ou pipeline CI/CD.
-  - Le format HTML est human-readable → pour présenter à un client ou manager.
-  - Le hash SHA256 du rapport lui-même prouve qu'il n'a pas été altéré après génération
-    (concept de "chain of custody" / chaîne de preuve en forensic).
-  - Les niveaux de sévérité (CRITICAL / HIGH / MEDIUM / LOW / CLEAN) viennent du
-    standard CVSS (Common Vulnerability Scoring System) utilisé partout en sécu.
-
-Structure du rapport JSON :
-  {
-    "meta": {
-      "tool":      "SecureScope v0.1.0",
-      "timestamp": "2026-05-04T09:54:44Z",
-      "os":        "linux",
-      "target":    "/tmp",
-      "mode":      "quick",
-      "report_hash": "sha256:abcd1234..."   ← intégrité du rapport lui-même
-    },
-    "summary": {
-      "total":    12,
-      "critical": 1,
-      "high":     2,
-      "medium":   3,
-      "low":      6,
-      "clean":    0
-    },
-    "findings": [
-      {
-        "severity": "CRITICAL",
-        "target":   "/tmp/evil.sh",
-        "reason":   "hash matches known malware",
-        "timestamp": "2026-05-04T09:54:45Z"
-      }
-    ]
-  }
+  - JSON → machine-readable, intégrable dans un SIEM ou pipeline CI/CD.
+  - HTML → human-readable, présentable à un client ou manager.
+  - Le hash SHA256 du rapport lui-même (chain of custody).
+  - Niveaux CRITICAL/HIGH/MEDIUM/LOW → standard CVSS.
 """
 
 import json
@@ -51,14 +20,13 @@ from typing import Any
 
 REPORTS_DIR = Path("reports")
 
-# Palette couleurs HTML par sévérité
-SEVERITY_CSS = {
-    "CRITICAL": "#ff4444",
-    "HIGH":     "#ff8800",
-    "MEDIUM":   "#ffcc00",
-    "LOW":      "#aaaaff",
-    "CLEAN":    "#44ff88",
-    "INFO":     "#888888",
+# Palette sévérité — utilisée dans JSON et HTML
+SEVERITY_COLORS = {
+    "CRITICAL": {"bg": "#fee2e2", "text": "#991b1b", "border": "#f87171", "dot": "#dc2626"},
+    "HIGH":     {"bg": "#ffedd5", "text": "#9a3412", "border": "#fb923c", "dot": "#ea580c"},
+    "MEDIUM":   {"bg": "#fef9c3", "text": "#854d0e", "border": "#facc15", "dot": "#ca8a04"},
+    "LOW":      {"bg": "#eff6ff", "text": "#1e40af", "border": "#93c5fd", "dot": "#3b82f6"},
+    "INFO":     {"bg": "#f0fdf4", "text": "#166534", "border": "#86efac", "dot": "#22c55e"},
 }
 
 
@@ -73,19 +41,11 @@ def build_report(
     timestamp: str,
     version:   str = "0.1.0",
 ) -> dict[str, Any]:
-    """
-    Assemble le dictionnaire complet du rapport.
-
-    Concept :
-      Séparer 'construire le rapport' de 'l'écrire sur disque'
-      permet de le tester unitairement et de le réutiliser
-      (ex : l'envoyer par webhook sans l'écrire).
-    """
     summary = _compute_summary(findings)
-
     return {
         "meta": {
-            "tool":      f"SecureScope v{version}",
+            "tool":      f"SudoSu v{version}",
+            "tool_full": "Security Unified Defense & Offensive Scanning Utility",
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "os":        os_name,
             "target":    target,
@@ -98,14 +58,7 @@ def build_report(
 
 
 def _compute_summary(findings: list[dict]) -> dict[str, int]:
-    """
-    Compte les findings par sévérité.
-    
-    Concept CVSS : les rapports de vulnérabilités comptent toujours
-    par niveau de criticité pour prioriser la remédiation.
-    Un CRITICAL doit être traité avant un LOW.
-    """
-    counts = {"total": len(findings), "critical": 0, "high": 0, "medium": 0, "low": 0, "clean": 0}
+    counts = {"total": len(findings), "critical": 0, "high": 0, "medium": 0, "low": 0}
     for f in findings:
         sev = f.get("severity", "LOW").lower()
         if sev in counts:
@@ -118,159 +71,502 @@ def _compute_summary(findings: list[dict]) -> dict[str, int]:
 # ──────────────────────────────────────────────
 def save_json(report: dict, timestamp: str) -> Path:
     """
-    Écrit le rapport en JSON + calcule son hash SHA256.
-
-    Le hash est ajouté AU rapport lui-même dans la clé meta.report_hash.
-    → Proof of integrity : si le fichier est modifié après, le hash ne correspondra plus.
-    
-    Concept forensic (chain of custody) :
-      En cas de procédure légale, on peut prouver que le rapport
-      n'a pas été altéré entre sa génération et sa présentation.
+    Écrit le rapport JSON + injecte son propre hash SHA256.
+    Chain of custody : prouve l'intégrité du rapport après génération.
     """
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-    path = REPORTS_DIR / f"report_{timestamp}.json"
+    path = REPORTS_DIR / f"sudosu_report_{timestamp}.json"
 
-    # Premier dump sans hash (pour calculer le hash du contenu)
     raw = json.dumps(report, indent=2, ensure_ascii=False)
     sha = hashlib.sha256(raw.encode()).hexdigest()
-
-    # On injecte le hash dans le rapport
     report["meta"]["report_hash"] = f"sha256:{sha}"
 
-    # Deuxième dump avec hash
     final = json.dumps(report, indent=2, ensure_ascii=False)
     path.write_text(final, encoding="utf-8")
-
     return path
 
 
 # ──────────────────────────────────────────────
-# Export HTML
+# Export HTML — thème clair, design pro
 # ──────────────────────────────────────────────
 def save_html(report: dict, timestamp: str) -> Path:
-    """
-    Génère un rapport HTML standalone, lisible dans un navigateur.
-    Aucune dépendance externe : tout est inline (CSS + JS embarqués).
-
-    Pourquoi HTML ?
-      Un recruteur ou client non-technique peut ouvrir ce fichier directement.
-      C'est ce que font les outils pro : nessus, burp suite, openvas...
-      tous produisent des rapports HTML exportables.
-    """
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-    path = REPORTS_DIR / f"report_{timestamp}.html"
+    path = REPORTS_DIR / f"sudosu_report_{timestamp}.html"
 
     meta     = report["meta"]
     summary  = report["summary"]
     findings = report["findings"]
+    ts_pretty = meta.get("timestamp", "")[:19].replace("T", " ") + " UTC"
 
-    # ── Lignes du tableau findings ──
+    # ── Calcul du niveau de risque global ──────────────────────────
+    if summary.get("critical", 0) > 0:
+        risk_label, risk_color, risk_bg = "CRITICAL", "#dc2626", "#fee2e2"
+    elif summary.get("high", 0) > 0:
+        risk_label, risk_color, risk_bg = "HIGH", "#ea580c", "#ffedd5"
+    elif summary.get("medium", 0) > 0:
+        risk_label, risk_color, risk_bg = "MEDIUM", "#ca8a04", "#fef9c3"
+    else:
+        risk_label, risk_color, risk_bg = "LOW", "#3b82f6", "#eff6ff"
+
+    # ── Cartes de résumé ───────────────────────────────────────────
+    cards = [
+        ("CRITICAL", summary.get("critical", 0), "#dc2626", "#fee2e2"),
+        ("HIGH",     summary.get("high",     0), "#ea580c", "#ffedd5"),
+        ("MEDIUM",   summary.get("medium",   0), "#ca8a04", "#fef9c3"),
+        ("LOW",      summary.get("low",      0), "#3b82f6", "#eff6ff"),
+        ("TOTAL",    summary.get("total",    0), "#6b7280", "#f3f4f6"),
+    ]
+    cards_html = ""
+    for label, count, color, bg in cards:
+        cards_html += f"""
+        <div class="card" style="background:{bg};border-color:{color}20">
+          <div class="card-number" style="color:{color}">{count}</div>
+          <div class="card-label" style="color:{color}cc">{label}</div>
+        </div>"""
+
+    # ── Lignes du tableau findings ─────────────────────────────────
     rows_html = ""
-    for f in findings:
-        sev   = f.get("severity", "LOW").upper()
-        color = SEVERITY_CSS.get(sev, "#888")
-        rows_html += f"""
-        <tr>
-          <td><span class="badge" style="background:{color}">{sev}</span></td>
-          <td class="mono">{_esc(f.get('target', 'N/A'))}</td>
-          <td>{_esc(f.get('reason', ''))}</td>
-          <td class="mono muted">{_esc(f.get('timestamp', ''))}</td>
+    if not findings:
+        rows_html = '<tr><td colspan="4" class="empty">No findings detected — system appears clean.</td></tr>'
+    else:
+        for i, f in enumerate(findings):
+            sev    = f.get("severity", "LOW").upper()
+            colors = SEVERITY_COLORS.get(sev, SEVERITY_COLORS["LOW"])
+            bg     = "#fafafa" if i % 2 == 0 else "#ffffff"
+            mod    = f.get("module", "").replace("_", " ").replace(".", " › ")
+            ts_row = f.get("timestamp", "")[:19].replace("T", " ")
+
+            rows_html += f"""
+        <tr style="background:{bg}">
+          <td>
+            <span class="badge"
+              style="background:{colors['bg']};color:{colors['text']};border-color:{colors['border']}">
+              <span class="dot" style="background:{colors['dot']}"></span>
+              {sev}
+            </span>
+          </td>
+          <td class="target-cell">
+            <span class="target-path">{_esc(f.get('target', 'N/A'))}</span>
+            <span class="module-tag">{_esc(mod)}</span>
+          </td>
+          <td class="reason-cell">{_esc(f.get('reason', ''))}</td>
+          <td class="ts-cell">{_esc(ts_row)}</td>
         </tr>"""
 
-    # ── Cartes summary ──
-    cards_html = ""
-    card_defs = [
-        ("CRITICAL", summary.get("critical", 0), "#ff4444"),
-        ("HIGH",     summary.get("high",     0), "#ff8800"),
-        ("MEDIUM",   summary.get("medium",   0), "#ffcc00"),
-        ("LOW",      summary.get("low",      0), "#aaaaff"),
-        ("TOTAL",    summary.get("total",    0), "#cccccc"),
-    ]
-    for label, count, color in card_defs:
-        cards_html += f"""
-        <div class="card" style="border-top: 4px solid {color}">
-          <div class="card-count" style="color:{color}">{count}</div>
-          <div class="card-label">{label}</div>
+    # ── Meta items ─────────────────────────────────────────────────
+    meta_items_html = ""
+    for label, key in [("Target", "target"), ("Mode", "mode"), ("OS", "os"), ("Session", "session")]:
+        meta_items_html += f"""
+        <div class="meta-chip">
+          <span class="meta-label">{label}</span>
+          <span class="meta-value">{_esc(str(meta.get(key, 'N/A')))}</span>
         </div>"""
+
+    report_hash = meta.get("report_hash", "N/A")
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>SecureScope Report — {timestamp}</title>
+<title>SudoSu Report — {timestamp}</title>
 <style>
-  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600;700&display=swap');
+
+  *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
+
+  :root {{
+    --bg:        #f8f9fb;
+    --surface:   #ffffff;
+    --border:    #e5e7eb;
+    --text:      #111827;
+    --text-2:    #6b7280;
+    --text-3:    #9ca3af;
+    --accent:    #0f172a;
+    --radius:    10px;
+    --shadow:    0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.04);
+    --shadow-md: 0 4px 16px rgba(0,0,0,.08), 0 2px 4px rgba(0,0,0,.04);
+  }}
+
   body {{
-    font-family: 'Segoe UI', system-ui, sans-serif;
-    background: #0d0d0d; color: #e0e0e0;
-    padding: 2rem;
+    font-family: 'DM Sans', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    padding: 0;
   }}
-  header {{
-    border-bottom: 2px solid #ff4444;
-    padding-bottom: 1.5rem; margin-bottom: 2rem;
+
+  /* ── Header ── */
+  .header {{
+    background: var(--accent);
+    color: #fff;
+    padding: 2.5rem 3rem 2rem;
+    position: relative;
+    overflow: hidden;
   }}
-  header h1 {{ font-size: 2rem; color: #ff4444; letter-spacing: 0.1em; }}
-  header p  {{ color: #888; font-size: 0.85rem; margin-top: 0.4rem; }}
-  .meta-grid {{
-    display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-    gap: 1rem; margin-bottom: 2rem;
+  .header::before {{
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(
+      45deg,
+      transparent,
+      transparent 40px,
+      rgba(255,255,255,.015) 40px,
+      rgba(255,255,255,.015) 80px
+    );
   }}
-  .meta-item {{ background: #1a1a1a; border: 1px solid #333; border-radius: 6px; padding: 0.8rem 1rem; }}
-  .meta-item .label {{ font-size: 0.7rem; color: #888; text-transform: uppercase; letter-spacing: 0.08em; }}
-  .meta-item .value {{ font-size: 0.95rem; color: #e0e0e0; margin-top: 0.3rem; font-family: monospace; }}
-  .summary-cards {{ display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 2rem; }}
+  .header-inner {{
+    position: relative;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 1.5rem;
+  }}
+  .logo-area h1 {{
+    font-size: 2rem;
+    font-weight: 700;
+    letter-spacing: .12em;
+    color: #fff;
+  }}
+  .logo-area h1 span {{ color: #f87171; }}
+  .logo-area .tagline {{
+    font-size: .78rem;
+    color: rgba(255,255,255,.45);
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    margin-top: .25rem;
+    font-family: 'DM Mono', monospace;
+  }}
+  .risk-pill {{
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: .25rem;
+  }}
+  .risk-pill .risk-label {{
+    font-size: .65rem;
+    color: rgba(255,255,255,.4);
+    text-transform: uppercase;
+    letter-spacing: .1em;
+  }}
+  .risk-pill .risk-badge {{
+    padding: .4rem 1.1rem;
+    border-radius: 99px;
+    font-size: .85rem;
+    font-weight: 700;
+    letter-spacing: .06em;
+    background: {risk_bg};
+    color: {risk_color};
+    border: 1.5px solid {risk_color}44;
+  }}
+  .header-meta {{
+    position: relative;
+    display: flex;
+    flex-wrap: wrap;
+    gap: .5rem;
+    margin-top: 1.5rem;
+    padding-top: 1.25rem;
+    border-top: 1px solid rgba(255,255,255,.1);
+  }}
+  .meta-chip {{
+    display: flex;
+    align-items: center;
+    gap: .4rem;
+    background: rgba(255,255,255,.07);
+    border: 1px solid rgba(255,255,255,.1);
+    border-radius: 6px;
+    padding: .3rem .7rem;
+    font-size: .78rem;
+  }}
+  .meta-chip .meta-label {{
+    color: rgba(255,255,255,.4);
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    font-size: .65rem;
+  }}
+  .meta-chip .meta-value {{
+    color: rgba(255,255,255,.85);
+    font-family: 'DM Mono', monospace;
+  }}
+
+  /* ── Body ── */
+  .body {{
+    padding: 2rem 3rem 3rem;
+    max-width: 1400px;
+    margin: 0 auto;
+  }}
+
+  /* ── Summary Cards ── */
+  .section-title {{
+    font-size: .7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .1em;
+    color: var(--text-2);
+    margin-bottom: 1rem;
+    margin-top: 2rem;
+  }}
+  .cards-row {{
+    display: flex;
+    gap: .75rem;
+    flex-wrap: wrap;
+    margin-bottom: .5rem;
+  }}
   .card {{
-    background: #1a1a1a; border: 1px solid #333; border-radius: 8px;
-    padding: 1rem 1.5rem; min-width: 100px; text-align: center;
+    flex: 1;
+    min-width: 100px;
+    border-radius: var(--radius);
+    border: 1.5px solid transparent;
+    padding: 1.1rem 1.25rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: .2rem;
+    box-shadow: var(--shadow);
+    transition: transform .15s, box-shadow .15s;
   }}
-  .card-count {{ font-size: 2rem; font-weight: 700; }}
-  .card-label {{ font-size: 0.7rem; color: #888; text-transform: uppercase; margin-top: 0.3rem; letter-spacing: 0.08em; }}
-  h2 {{ font-size: 1rem; text-transform: uppercase; letter-spacing: 0.1em; color: #888; margin-bottom: 1rem; }}
-  table {{ width: 100%; border-collapse: collapse; background: #1a1a1a; border-radius: 8px; overflow: hidden; }}
-  th {{ background: #222; color: #888; font-size: 0.75rem; text-transform: uppercase;
-        letter-spacing: 0.08em; padding: 0.8rem 1rem; text-align: left; }}
-  td {{ padding: 0.7rem 1rem; border-bottom: 1px solid #222; font-size: 0.88rem; vertical-align: top; }}
+  .card:hover {{ transform: translateY(-2px); box-shadow: var(--shadow-md); }}
+  .card-number {{
+    font-size: 2.2rem;
+    font-weight: 700;
+    line-height: 1;
+    font-family: 'DM Mono', monospace;
+  }}
+  .card-label {{
+    font-size: .65rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .1em;
+  }}
+
+  /* ── Findings Table ── */
+  .table-wrapper {{
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    overflow: hidden;
+    box-shadow: var(--shadow);
+    background: var(--surface);
+  }}
+  table {{
+    width: 100%;
+    border-collapse: collapse;
+    font-size: .875rem;
+  }}
+  thead tr {{
+    background: #f9fafb;
+    border-bottom: 1.5px solid var(--border);
+  }}
+  th {{
+    padding: .75rem 1rem;
+    text-align: left;
+    font-size: .65rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: var(--text-2);
+    white-space: nowrap;
+  }}
+  td {{
+    padding: .85rem 1rem;
+    border-bottom: 1px solid #f3f4f6;
+    vertical-align: top;
+  }}
   tr:last-child td {{ border-bottom: none; }}
-  tr:hover td {{ background: #1f1f1f; }}
-  .badge {{
-    display: inline-block; padding: 0.2rem 0.6rem; border-radius: 4px;
-    font-size: 0.72rem; font-weight: 700; color: #000; letter-spacing: 0.05em;
+  tr:hover td {{ background: #fafbff !important; }}
+  .empty {{
+    text-align: center;
+    color: var(--text-3);
+    padding: 3rem 1rem;
+    font-style: italic;
   }}
-  .mono  {{ font-family: monospace; font-size: 0.82rem; }}
-  .muted {{ color: #666; }}
-  footer {{ margin-top: 2rem; color: #444; font-size: 0.75rem; text-align: center; }}
+
+  /* ── Badge ── */
+  .badge {{
+    display: inline-flex;
+    align-items: center;
+    gap: .3rem;
+    padding: .25rem .65rem;
+    border-radius: 6px;
+    font-size: .7rem;
+    font-weight: 700;
+    letter-spacing: .05em;
+    border: 1.5px solid transparent;
+    white-space: nowrap;
+    font-family: 'DM Mono', monospace;
+  }}
+  .dot {{
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }}
+
+  /* ── Table cells ── */
+  .target-cell {{
+    max-width: 280px;
+  }}
+  .target-path {{
+    display: block;
+    font-family: 'DM Mono', monospace;
+    font-size: .78rem;
+    color: var(--text);
+    word-break: break-all;
+    line-height: 1.4;
+  }}
+  .module-tag {{
+    display: inline-block;
+    margin-top: .3rem;
+    font-size: .65rem;
+    color: var(--text-3);
+    background: #f3f4f6;
+    border-radius: 4px;
+    padding: .1rem .4rem;
+    font-family: 'DM Mono', monospace;
+  }}
+  .reason-cell {{
+    color: #374151;
+    line-height: 1.5;
+    max-width: 420px;
+    font-size: .83rem;
+  }}
+  .ts-cell {{
+    font-family: 'DM Mono', monospace;
+    font-size: .72rem;
+    color: var(--text-3);
+    white-space: nowrap;
+  }}
+
+  /* ── Hash block ── */
+  .hash-block {{
+    margin-top: 2rem;
+    background: #f9fafb;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1rem 1.25rem;
+    display: flex;
+    align-items: flex-start;
+    gap: 1rem;
+    box-shadow: var(--shadow);
+  }}
+  .hash-icon {{
+    font-size: 1.25rem;
+    flex-shrink: 0;
+    margin-top: .1rem;
+  }}
+  .hash-content .hash-title {{
+    font-size: .7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: var(--text-2);
+    margin-bottom: .3rem;
+  }}
+  .hash-value {{
+    font-family: 'DM Mono', monospace;
+    font-size: .75rem;
+    color: #374151;
+    word-break: break-all;
+    line-height: 1.6;
+  }}
+  .hash-note {{
+    font-size: .7rem;
+    color: var(--text-3);
+    margin-top: .3rem;
+  }}
+
+  /* ── Footer ── */
+  .footer {{
+    text-align: center;
+    padding: 1.5rem 3rem;
+    font-size: .72rem;
+    color: var(--text-3);
+    border-top: 1px solid var(--border);
+    background: var(--surface);
+    font-family: 'DM Mono', monospace;
+  }}
+  .footer strong {{ color: var(--text-2); }}
+
+  @media print {{
+    body {{ background: #fff; }}
+    .header {{ -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
+    tr {{ page-break-inside: avoid; }}
+  }}
 </style>
 </head>
 <body>
 
-<header>
-  <h1>⬡ SECURESCOPE</h1>
-  <p>Security Scan Report · {meta.get('timestamp','')} · Session {timestamp}</p>
-</header>
+<!-- ── HEADER ── -->
+<div class="header">
+  <div class="header-inner">
+    <div class="logo-area">
+      <h1>⬡ SUDO<span>SU</span></h1>
+      <div class="tagline">Security Unified Defense &amp; Offensive Scanning Utility</div>
+    </div>
+    <div class="risk-pill">
+      <div class="risk-label">Overall Risk</div>
+      <div class="risk-badge">{risk_label}</div>
+    </div>
+  </div>
+  <div class="header-meta">
+    <div class="meta-chip">
+      <span class="meta-label">Generated</span>
+      <span class="meta-value">{_esc(ts_pretty)}</span>
+    </div>
+    {meta_items_html}
+    <div class="meta-chip">
+      <span class="meta-label">Version</span>
+      <span class="meta-value">{_esc(meta.get('tool', 'SudoSu'))}</span>
+    </div>
+  </div>
+</div>
 
-<section class="meta-grid">
-  <div class="meta-item"><div class="label">Tool</div><div class="value">{_esc(meta.get('tool',''))}</div></div>
-  <div class="meta-item"><div class="label">Target</div><div class="value">{_esc(meta.get('target',''))}</div></div>
-  <div class="meta-item"><div class="label">Mode</div><div class="value">{_esc(meta.get('mode',''))}</div></div>
-  <div class="meta-item"><div class="label">OS</div><div class="value">{_esc(meta.get('os',''))}</div></div>
-  <div class="meta-item"><div class="label">Report Hash</div><div class="value" style="font-size:0.7rem;word-break:break-all">{_esc(meta.get('report_hash','N/A'))}</div></div>
-</section>
+<!-- ── BODY ── -->
+<div class="body">
 
-<h2>Summary</h2>
-<div class="summary-cards">{cards_html}</div>
+  <div class="section-title">Summary</div>
+  <div class="cards-row">{cards_html}</div>
 
-<h2>Findings</h2>
-<table>
-  <thead>
-    <tr>
-      <th>Severity</th><th>Target / Path</th><th>Reason</th><th>Timestamp</th>
-    </tr>
-  </thead>
-  <tbody>{rows_html}</tbody>
-</table>
+  <div class="section-title" style="margin-top:2rem">Findings
+    <span style="font-size:.65rem;color:var(--text-3);margin-left:.5rem;text-transform:none;letter-spacing:0">
+      ({summary.get('total',0)} total)
+    </span>
+  </div>
+  <div class="table-wrapper">
+    <table>
+      <thead>
+        <tr>
+          <th style="width:110px">Severity</th>
+          <th>Target / Path</th>
+          <th>Reason</th>
+          <th style="width:135px">Timestamp (UTC)</th>
+        </tr>
+      </thead>
+      <tbody>{rows_html}</tbody>
+    </table>
+  </div>
 
-<footer>Generated by SecureScope · {meta.get('timestamp','')} · All times UTC</footer>
+  <!-- Chain of custody -->
+  <div class="hash-block">
+    <div class="hash-icon">🔒</div>
+    <div class="hash-content">
+      <div class="hash-title">Report Integrity — Chain of Custody</div>
+      <div class="hash-value">{_esc(report_hash)}</div>
+      <div class="hash-note">
+        This SHA256 hash was computed on the report content at generation time.
+        Any modification to the JSON report will invalidate this hash.
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ── FOOTER ── -->
+<div class="footer">
+  Generated by <strong>SudoSu v{_esc(meta.get('tool','').split('v')[-1])}</strong>
+  &nbsp;·&nbsp; {_esc(ts_pretty)}
+  &nbsp;·&nbsp; Built for defenders, inspired by attackers.
+</div>
 
 </body>
 </html>"""
@@ -279,9 +575,5 @@ def save_html(report: dict, timestamp: str) -> Path:
     return path
 
 
-# ──────────────────────────────────────────────
-# Helper
-# ──────────────────────────────────────────────
 def _esc(s: str) -> str:
-    """Échappe les caractères HTML pour éviter les injections dans le rapport."""
     return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")

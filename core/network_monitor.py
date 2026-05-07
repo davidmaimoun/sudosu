@@ -127,7 +127,7 @@ TCP_STATES = {
     "0B": "CLOSING",
 }
 
-# Ports légitimes — pas d'alerte sur ces ports en écoute
+# Ports légitimes connus — pas d'alerte sur ces ports en écoute
 LEGIT_LISTEN_PORTS = {
     22,    # SSH
     25,    # SMTP
@@ -142,10 +142,34 @@ LEGIT_LISTEN_PORTS = {
     995,   # POP3S
     3306,  # MySQL
     5432,  # PostgreSQL
+    5433,  # PostgreSQL alt
     6379,  # Redis
     27017, # MongoDB
-    8080,  # HTTP alternatif (légitime)
-    8443,  # HTTPS alternatif (légitime)
+    8080,  # HTTP alternatif
+    8443,  # HTTPS alternatif
+    8888,  # Jupyter Notebook (dev)
+    # Ports dev courants — trop de faux positifs sinon
+    3000, 3001,        # Node.js / React
+    4200,              # Angular
+    5000, 5001,        # Flask / Python API
+    5173, 5174,        # Vite (React/Vue dev server)
+    8000, 8001,        # Django / Python
+    9000,              # PHP-FPM / SonarQube
+}
+
+# Plages d'IP Google (services légitimes : Chrome sync, FCM, Firebase...)
+# Port 5228 = Google Cloud Messaging / Firebase — normal pour Chrome, Android
+GOOGLE_IP_RANGES = [
+    (0x4000_0000, 0x40FF_FFFF),  # 64.0.0.0/8  (Google partiel)
+    (0x4A7D_0000, 0x4A7D_FFFF),  # 74.125.0.0/16 (Google)
+    (0x4265_0000, 0x4265_FFFF),  # 66.102.0.0/16 (Google)
+    (0x4A6C_0000, 0x4A6C_FFFF),  # 74.108.0.0/16 (Google)
+]
+
+# Ports utilisés par des services Google légitimes
+GOOGLE_SERVICE_PORTS = {
+    5228,  # Google Cloud Messaging / Firebase / Chrome sync
+    19302, # Google STUN (WebRTC)
 }
 
 # Ports C2 connus — présence = très suspect
@@ -355,6 +379,7 @@ def _analyze_connection(conn: dict, log) -> dict | None:
     Retourne un finding si suspect, None sinon.
     """
     local_port  = conn["local_port"]
+    local_ip    = conn["local_ip"]
     remote_port = conn["remote_port"]
     remote_ip   = conn["remote_ip"]
     state       = conn["state"]
@@ -377,43 +402,75 @@ def _analyze_connection(conn: dict, log) -> dict | None:
             reasons.append(f"Known C2 port {port} ({desc}) — state={state}")
             severity = _escalate(severity, "CRITICAL")
 
-    # ── Check 2 : Bind shell — shell en écoute sur un port inhabituel
+    # ── Check 2 : Port en LISTEN — distinguer localhost vs 0.0.0.0 ─────────────
     #
-    # Un attaquant peut ouvrir un port qui écoute et y attacher un shell :
-    #   nc -lvp 9999 -e /bin/bash
-    # → Quiconque se connecte au port 9999 obtient un bash root.
+    # DISTINCTION FONDAMENTALE que l'ancienne version ignorait :
     #
-    # Signature : état LISTEN + port non-légitime + UID=0 (root)
+    #   127.0.0.1:5173 (LISTEN) → accessible UNIQUEMENT depuis cette machine
+    #                             → dev server Vite/React/Flask → NORMAL
+    #
+    #   0.0.0.0:4444  (LISTEN)  → accessible depuis tout le réseau
+    #                             → bind shell Meterpreter → CRITICAL
+    #
+    # Un scanner qui traite les deux identiquement génère massivement
+    # de faux positifs sur les machines de développement.
+    #
+    # Règle :
+    #   localhost (127.x.x.x / ::1) → bruit si port non-C2 → ignorer
+    #   0.0.0.0 / :: → potentiel bind shell → analyser
     if state == "LISTEN" and local_port not in LEGIT_LISTEN_PORTS:
-        if local_port > 1024:
+        is_localhost_only = local_ip in ("127.0.0.1", "::1", "0:0:0:0:0:0:0:1")
+
+        if local_port > 1024 and not is_localhost_only:
+            # Port élevé accessible depuis le réseau → potentiel bind shell
             reasons.append(
-                f"Unexpected listening port {local_port} "
-                f"(not in known-services list) — possible bind shell"
+                f"Non-standard port {local_port} listening on {local_ip} "
+                f"(network-accessible) — possible bind shell or misconfigured service"
             )
             severity = _escalate(severity, "HIGH")
+        elif local_port > 1024 and is_localhost_only:
+            # Port localhost uniquement → probablement un dev server, on ignore
+            # (Vite:5173, Flask:5000, Node:3000, etc.)
+            pass
         elif local_port <= 1024 and uid != 0:
-            # Port privilégié ouvert par non-root → escalade de privilège probable
             reasons.append(
                 f"Privileged port {local_port} listening — opened by UID={uid} (not root)"
                 f" → privilege escalation indicator"
             )
             severity = _escalate(severity, "HIGH")
 
-    # ── Check 3 : Connexion établie vers internet ────────────────────
+    # ── Check 3 : Connexion ESTABLISHED vers internet ────────────────
     #
-    # On vérifie si l'IP distante est publique (hors plages privées RFC 1918).
-    # Une connexion ESTABLISHED vers une IP publique sur port suspect
-    # est le signe classique d'un reverse shell ou d'un beacon C2.
+    # Distingue les services légitimes (Google, CDN) des vrais C2.
     #
-    # Ports légitimes sur internet : 80, 443, 53...
-    # Ports suspects sur internet   : 4444, 1337, tout ce qui est > 10000 et inconnu
+    # Ports Google légitimes (Chrome sync, FCM, Firebase) :
+    #   5228 → Google Cloud Messaging — NORMAL si process=chrome/google-services
+    #
+    # Un vrai C2 :
+    #   - IP inconnue (pas Google, pas CDN connu)
+    #   - Port non-standard (pas 80, 443, 5228...)
+    #   - Process inattendu (bash, python, perl... pas chrome)
     if state == "ESTABLISHED" and not _is_private_ip(remote_ip):
-        if remote_port not in LEGIT_LISTEN_PORTS and remote_port > 1024:
-            reasons.append(
-                f"Established connection to public IP {remote_ip}:{remote_port} "
-                f"on non-standard port — possible reverse shell / C2 beacon"
-            )
-            severity = _escalate(severity, "HIGH")
+        is_google_ip = _is_google_ip(remote_ip)
+        is_google_port = remote_port in GOOGLE_SERVICE_PORTS
+
+        if is_google_ip and is_google_port:
+            # Google infrastructure sur port Google → Chrome/Firebase/sync → ignorer
+            pass
+        elif remote_port not in LEGIT_LISTEN_PORTS and remote_port > 1024:
+            if is_google_ip:
+                # IP Google mais port inhabituel → MEDIUM (probablement légitime mais inhabituel)
+                reasons.append(
+                    f"Connection to Google IP {remote_ip}:{remote_port} on non-standard port "
+                    f"— likely legitimate (Chrome/GCP) but verify process"
+                )
+                severity = _escalate(severity, "MEDIUM")
+            else:
+                reasons.append(
+                    f"Established connection to public IP {remote_ip}:{remote_port} "
+                    f"on non-standard port — possible reverse shell / C2 beacon"
+                )
+                severity = _escalate(severity, "HIGH")
 
     # ── Check 4 : Connexion sur port 0 ──────────────────────────────
     #
@@ -461,6 +518,42 @@ def _analyze_connection(conn: dict, log) -> dict | None:
 # ──────────────────────────────────────────────
 # Helpers réseau
 # ──────────────────────────────────────────────
+def _is_google_ip(ip: str) -> bool:
+    """
+    Retourne True si l'IP appartient aux plages Google.
+
+    Google utilise plusieurs blocs d'IP pour ses services :
+    Chrome sync, Firebase Cloud Messaging, Google APIs, CDN...
+    Une connexion vers ces IPs est presque toujours légitime
+    sur une machine desktop (Chrome, Android Studio, Google Drive...).
+
+    Pour une liste complète et à jour : https://www.gstatic.com/ipranges/goog.json
+    On implémente ici les plages les plus courantes.
+    """
+    if ":" in ip:  # IPv6 Google → on traite comme potentiellement légitime
+        return ip.startswith("2607:f8b0") or ip.startswith("2404:6800")
+    try:
+        packed = struct.unpack(">I", socket.inet_aton(ip))[0]
+        # Plages principales Google (approximatif — suffisant pour réduire les FP)
+        google_ranges = [
+            (0x4009_0000, 0x4009_FFFF),  # 64.9.x.x
+            (0x4015_0000, 0x4015_FFFF),  # 64.21.x.x
+            (0x4233_0000, 0x4233_FFFF),  # 66.51.x.x
+            (0x4A7D_0000, 0x4A7D_FFFF),  # 74.125.x.x (Gmail, Google APIs)
+            (0x4E80_0000, 0x4E8F_FFFF),  # 78.128.x.x
+            (0x8EFA_0000, 0x8EFA_FFFF),  # 142.250.x.x (Google)
+            (0x8EFB_0000, 0x8EFB_FFFF),  # 142.251.x.x (Google)
+            (0xACD9_0000, 0xACD9_FFFF),  # 172.217.x.x (Google)
+            (0xACDA_0000, 0xACDA_FFFF),  # 172.218.x.x (Google)
+            (0xD83A_C000, 0xD83A_CFFF),  # 216.58.x.x (Google)
+            (0xD83A_D000, 0xD83A_DFFF),  # 216.58.x.x suite
+            (0xD854_0000, 0xD854_FFFF),  # 216.84.x.x
+        ]
+        return any(lo <= packed <= hi for lo, hi in google_ranges)
+    except (socket.error, struct.error):
+        return False
+
+
 def _is_private_ip(ip: str) -> bool:
     """
     Retourne True si l'IP est dans une plage privée (RFC 1918) ou loopback.

@@ -1,0 +1,573 @@
+Report:
+Pt classifier differement tt les prog normalement suid,peut etre ajouter note courte expliquant a quoi sert le prog et pk il est suid. lheuristique amene a trop d'affolement 
+
+- pour pppd - pas automatiquemnet critique - Sur beaucoup de distributions Linux, il est normal qu’il soit installé.
+- pour 	/tmp/.org.chromium.Chromium.LhNrHN/Local State : Located in high-risk directory: /tmp , puis je add note pour expliquer que c normal chromium fais ca pour stocker etc...mais a checker quand mm
+- pour /opt/google/chrome/chrome-sandbox - SUID bit set (owner: root) → potential privilege escalation . c'est un comportement normal de chrome sandbox mais pt etre dangereux
+- idem pour /usr/lib/rstudio/chrome-sandbox
+- mount et umount a toujours suid, est ce normal de le laisser critical? car peut etre dangereux mais est tjrs suid...
+- pour CRITICAL	/usr/lib/dbus-1.0/dbus-daemon-launch-helper aussi
+- /usr/lib/snapd/snap-confine?
+- fusermount?  ✔️ SUID root attendu
+		✔️ composant officiel FUSE
+		✔️ nécessaire au système
+		⚠️ surface d’attaque potentielle (comme tout code kernel-facing)
+		❌ pas une vulnérabilité en soi
+		
+- idem pour 	/usr/bin/sudo, /usr/bin/passwd, /usr/bin/gpasswd, /usr/bin/chsh, /usr/bin/chfn, usr/bin/newgrp, /usr/bin/su, /usr/bin/newuidmap
+- pk /usr/lib/python3.10/urllib/request.py est flage?
+- fichiers temporaires Python /tmp/tmp-*.json paraisse clean
+- /usr/bin/at : bruit + surface d’attaque classique
+- /usr/bin/pkexec : vrai point sensible historique (CVE majeure)
+- /usr/share/mime/magic, /usr/lib/file/magic.mgc
+	shared-mime-info C’est une base de données système utilisée pour :
+		détecter le type de fichier (PDF, PNG, etc.)
+		analyser les signatures binaires
+		Pourquoi le scanner dit “hardcoded_private_key” ?
+			Très probablement :
+				faux positif de pattern matching
+				le fichier contient des chaînes qui ressemblent à des clés (ex: signatures, headers, base64-like blobs)
+	Mais ce fichier :
+	fait partie du système
+	est maintenu par la distro
+	ne contient pas de secrets utilisateur normalement
+- pour VM: CRITICAL	
+	/usr/lib/virtualbox/VirtualBoxVM	
+	/usr/lib/virtualbox/VBoxNetDHCP
+	/usr/lib/virtualbox/VBoxNetAdpCtl
+	/VBoxVolInfo, /VBoxNetNAT, /VBoxHeadless...
+	
+	-> “Virtualisation = zone sensible”
+	Mais pas :
+	“ton système est compromis”
+-/tmp/.org.chromium...
+	Network Persistent State
+	shared_proto_db
+	DawnWebGPUCache
+	CertificateRevocation/crl-set
+	ShaderCache
+	chrome_debug.log
+	component_crx_cache
+
+	Tout ça appartient à Chromium
+
+
+	Ce sont des composants internes de navigateur :
+
+	Network Persistent State
+	→ cookies, cache réseau, connexions
+	shared_proto_db
+	→ base interne Chromium (protobuf logs)
+	DawnWebGPUCache / ShaderCache
+	→ cache GPU / WebGL / WebGPU
+	CertificateRevocation / crl-set
+	→ liste de certificats révoqués (sécurité HTTPS)
+	component_crx_cache
+	→ extensions Chrome
+
+- /usr/share/mime/packages/gcr-crypto-types.xml
+	Le scanner détecte hardcoded_private_key
+	Mais ce fichier est une définition MIME XMLlié à GNOME Crypto (certificats, types de fichiers)
+
+- ssh-keysign : composant réellement sensible mais encore une fois : normal SUID système
+- /etc/profile.d/vte-2.91.sh
+
+			VTE
+
+			⚖️ Verdict :
+
+			INFO (shell config)
+	📍 /usr/bin/ping
+
+	🧠 Rôle :
+
+	test réseau ICMP
+
+	🚨 Pourquoi CRITICAL :
+
+	SUID parfois utilisé pour raw sockets
+
+	⚖️ Verdict :
+
+LOW (normal)
+- /usr/lib/mongodb-compass/chrome-sandbox
+
+	MongoDB Compass
+
+	🧠 Rôle :
+
+	sandbox Chromium Electron
+
+	⚠️ Verdict :
+
+	LOW / MEDIUM (normal Electron behavior)
+
+1. /usr/lib/xorg/Xorg.wrap
+
+X.Org Server
+
+🧠 Rôle
+
+C’est un wrapper qui permet de lancer le serveur graphique X11 avec contrôle d’accès.
+
+🚨 Pourquoi SUID/SGID ?
+accès aux périphériques graphiques (/dev/dri, input devices)
+contrôle session graphique
+sécurité multi-user desktop
+⚠️ Pourquoi scanner dit CRITICAL ?
+
+Parce que :
+
+SUID root
+accès hardware graphique
+composant critique système
+🧠 Réalité
+
+👉 C’est normal sur systèmes avec X11
+
+Mais :
+
+historiquement surface d’attaque importante (X11 est ancien)
+exploitable si bug Xorg
+⚖️ Verdict
+MEDIUM à HIGH selon contexte
+CRITICAL seulement si vulnérabilité active
+🟧 2. /usr/lib/x86_64-linux-gnu/lxc/lxc-user-nic
+
+LXC
+
+🧠 Rôle
+
+Permet :
+
+création interfaces réseau pour containers
+bridge réseau pour LXC rootless
+🚨 Pourquoi SUID ?
+modification interfaces réseau host
+nécessite privilèges kernel
+⚠️ Risque réel
+escape container si bug
+mauvaise config réseau
+CVE possibles (historique LXC)
+⚖️ Verdict
+MEDIUM
+HIGH si environnement container exposé
+🟨 3. /tmp/.org.chromium.../GraphiteDawnCache
+
+Chromium
+
+🧠 Rôle
+cache GPU rendering (Graphite / Dawn = WebGPU stack)
+⚠️ Pourquoi MEDIUM ?
+/tmp heuristic
+fichiers récents
+GPU cache = “sensible” regex
+⚖️ Verdict
+FAUX POSITIF / LOW
+🟥 4. /usr/lib/python2.7/urllib2.py
+
+Python
+
+🧠 Rôle
+librairie HTTP Python (legacy Python 2)
+🚨 Alert : “hardcoded_password”
+
+👉 presque sûrement FAUX POSITIF
+
+Pourquoi ?
+
+Python stdlib n’a pas de secrets
+regex trop large (mot “password” ou similar)
+⚠️ Important
+
+Python 2.7 est EOL :
+
+plus maintenu
+mais pas une faille en soi
+⚖️ Verdict
+LOW / INFO
+faux positif probable
+
+/usr/lib/x86_64-linux-gnu/libgtk3-nocsd.so.0
+
+GTK
+
+🧠 Rôle
+
+Lib graphique GTK (UI Linux)
+
+⚠️ Pourquoi scanner s’intéresse ?
+
+Souvent :
+
+heuristique de library injection
+mais ici rien d’anormal
+⚖️ Verdict
+INFO / LOW
+très probablement bruit
+🧭 SYNTHÈSE DE TON BLOC
+🔴 VRAI PROBLÈME
+/home/user1/.config/rstudio/config.json
+→ world-writable ❌ (vrai risque)
+🟡 SURFACE SENSIBLE (normal Linux)
+Xorg.wrap
+lxc-user-nic
+🔵 BRUIT / FAUX POSITIFS
+Chromium cache
+Python stdlib
+GTK lib
+
+
+
+1. /usr/bin/fusermount3 (EUID root != UID user)
+
+FUSE
+
+🧠 Ce que dit ton scanner
+
+UID=1000 mais EUID=0 → “privilege escalation suspect”
+
+🧠 Ce que c’est vraiment
+
+fusermount3 est conçu pour :
+
+monter des filesystem userspace
+nécessiter temporairement des privilèges root
+
+👉 donc il fait volontairement :
+
+UID user normal
+EUID root temporaire
+⚠️ Conclusion
+
+👉 comportement NORMAL Linux/FUSE
+
+❌ pas une attaque
+❌ pas un malware
+
+⚖️ Verdict
+MEDIUM (heuristique scanner)
+LOW (réalité)
+🟥 2. sh (PID orphelin parent = 1)
+🧠 Ce que dit ton scanner
+
+“orphan shell → possible reverse shell”
+
+🧠 Ce que ça veut dire réellement
+
+Quand un process n’a plus de parent :
+
+il est adopté par init (PID 1)
+
+Ça arrive souvent :
+
+scripts système
+jobs cron
+services
+sessions détachées
+tmux/screen
+crash parent process
+🚨 Est-ce un reverse shell ?
+
+👉 PAS forcément
+
+Pour être un reverse shell, il faudrait :
+
+connexion réseau sortante suspecte
+listener distant
+TTY interactif anormal
+injection shell
+⚖️ Verdict
+MEDIUM heuristique
+pas preuve d’attaque
+🟦 3. Toute la série chrome (deleted) / chrome_crashpad (deleted)
+
+Google Chrome
+
+🧠 Ce que dit ton scanner
+
+“fileless malware indicator: executable deleted but still running”
+
+🧠 Ce que ça veut dire vraiment
+
+Linux permet ceci :
+
+👉 un binaire peut être :
+
+lancé
+puis supprimé du disque
+mais continuer à s’exécuter en mémoire
+
+C’est normal pour :
+
+mises à jour Chrome
+auto-updater
+crash recovery
+sandbox processes
+crashpad (reporting system)
+🧠 Pourquoi ça apparaît MASSIVEMENT chez toi ?
+
+Parce que Chrome :
+
+spawn des dizaines de process
+utilise sandbox multiprocess
+met à jour ses composants en continu
+🚨 Est-ce du malware ?
+
+👉 NON dans ce contexte
+
+Un malware “fileless” aurait :
+
+activité réseau suspecte
+injection mémoire non Chrome
+persistence anormale
+
+Ici :
+👉 c’est Chrome + crashpad = normal
+
+⚖️ Verdict
+CRITICAL scanner (faux positif massif)
+REALITY : LOW / NORMAL
+🧠 4. Lecture globale du bloc
+🔵 fusermount3
+
+✔ comportement normal FUSE
+
+🟡 orphan sh
+
+✔ souvent normal (init adoption)
+
+🔴 chrome “deleted”
+
+✔ comportement normal Chrome multi-process
+
+🔥 5. Ce que ton scanner essaie de faire (mais échoue)
+
+Il applique des règles trop simples :
+
+if process == orphan shell → CRITICAL
+if executable == deleted → CRITICAL
+if UID != EUID → CRITICAL
+
+👉 mais Linux moderne viole constamment ces règles de façon légitime.
+
+🧭 6. Conclusion sécurité réelle
+
+👉 Aucun signe de compromission réel ici
+
+✔ normal :
+Chrome sandbox
+FUSE fusermount3
+process orphaned by design
+❌ pas de preuve :
+reverse shell
+malware fileless
+privilege escalation active
+🔥 7. Le vrai point important (niveau pro)
+
+Ce que tu observes est typique d’un système :
+
+“behavior-based scanner sans contexte OS”
+
+👉 donc il :
+
+sur-alerte Chrome
+sur-alerte FUSE
+sur-alerte process lifecycle normal Linux
+
+1. Ports en LISTEN sur 127.0.0.1 et ::1
+
+Exemples :
+
+127.0.0.1:49973
+127.0.0.1:26382
+127.0.0.1:5000
+::1:5173
+🧠 Ce que ça veut dire vraiment
+
+👉 127.0.0.1 / ::1 = localhost uniquement
+
+Donc :
+
+accessible UNIQUEMENT depuis ta machine
+pas depuis Internet
+pas depuis ton réseau local
+⚠️ Pourquoi ton scanner panique ?
+
+Parce qu’il voit :
+
+“port non standard = possible bind shell”
+
+Mais il ne vérifie pas :
+
+si c’est local-only
+quel process écoute
+si c’est un dev server
+🧠 Lecture réelle des ports
+🟡 5173
+
+👉 typique de :
+
+Vite dev server (React/Node frontend)
+🟡 5000
+
+👉 souvent :
+
+Flask / Python API
+🟡 ports aléatoires (40k+)
+
+👉 souvent :
+
+Node.js
+Electron apps
+Chrome internals
+dev tooling
+🚨 Est-ce un bind shell ?
+
+👉 très improbable ici
+
+Un bind shell réel aurait :
+
+écoute sur 0.0.0.0 (pas localhost)
+port stable ou masqué
+processus suspect
+persistance
+⚖️ Verdict
+LOW / NORMAL (dev machine typique)
+🟡 2. Connexions vers Google (64.233.x.x, 74.125.x.x) sur port 5228
+
+Exemples :
+
+64.233.167.188:5228
+74.125.71.188:5228
+
+Google
+
+🧠 C’est quoi le port 5228 ?
+
+👉 utilisé par :
+
+Google Play services
+Firebase Cloud Messaging (FCM)
+Chrome sync / services Google
+⚠️ Pourquoi scanner dit “C2 possible” ?
+
+Parce que :
+
+IP externe
+port non HTTP standard
+connexion persistante
+🧠 Mais réalité :
+
+👉 c’est très probablement :
+
+Chrome
+Android services sync
+push notifications
+background Google services
+🚨 Quand ça serait suspect ?
+
+Seulement si :
+
+IP non Google
+process inconnu
+trafic chiffré anormal
+beacon pattern régulier
+⚖️ Verdict
+NORMAL (Google infrastructure)
+🔴 3. “NO ACTIVE FIREWALL DETECTED”
+🧠 Ce que ça veut dire
+
+👉 aucun firewall actif détecté (ufw/iptables/nftables)
+
+⚠️ Pourquoi c’est marqué CRITICAL ?
+
+Parce que le scanner applique une règle simple :
+
+“pas de firewall = exposition totale”
+
+🧠 MAIS nuance importante
+
+Sur Linux desktop/dev machine :
+
+souvent firewall désactivé volontairement
+sécurité repose sur :
+ports bind locaux
+NAT router
+services non exposés
+🚨 Est-ce dangereux ?
+
+👉 dépend du contexte :
+
+🟢 si machine perso/dev
+pas critique immédiat
+🔴 si serveur exposé Internet
+CRITICAL réel
+⚖️ Verdict
+CRITICAL contextuel uniquement
+pas une compromission
+🧠 4. Lecture globale de TON bloc réseau
+🟢 NORMAL
+localhost ports (dev servers)
+Google services connections
+Chrome/Node internal networking
+🟡 SENSIBLE mais normal
+ports dynamiques élevés
+services dev exposés localement
+🔴 FAUX POSITIF IMPORTANT
+“bind shell possible”
+“C2 beacon Google IP”
+“unexpected port”
+🔥 5. Ce que ton scanner ne comprend pas
+
+Il confond :
+
+concept réel	interprétation scanner
+localhost ports	bind shell
+Google services	C2 beacon
+dev server ports	malware listener
+no firewall desktop	exposed host
+🧭 6. Conclusion honnête
+
+👉 Aucun signe de compromission réseau réel
+👉 Aucun reverse shell confirmé
+👉 Aucun C2 malveillant détecté
+👉 Beaucoup de services dev + Chrome + Google normal
+
+🧠 7. Le vrai takeaway (très important)
+
+Ton scanner est :
+
+“network visibility tool sans contexte application”
+
+Donc il voit :
+
+ports = danger
+connexions = C2
+absence firewall = CRITICAL
+
+Mais il ne voit pas :
+
+processus propriétaire
+contexte dev machine
+services légitimes (Chrome/Google/Node)
+
+Le vrai apprentissage ici
+
+Mon scanne montre :
+
+“tout ce qui est puissant”
+
+Mais pas :
+
+“tout ce qui est cassé”
+
+Ton scanner commence à montrer une chose clé :
+
+❌ il ne fait pas de distinction entre :
+“composant système normal”
+“surface d’attaque exploitable”
+“vulnérabilité réelle”
+“mauvaise configuration réelle”
+
+

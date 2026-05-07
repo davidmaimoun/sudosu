@@ -70,12 +70,66 @@ from config.patterns import (
 from utils.logger import get_logger
 
 # Taille max lue pour l'analyse de contenu (8 Ko)
-# Assez pour détecter les headers de malwares, pas assez pour saturer la RAM
 MAX_READ_BYTES = 8_192
 
-# Nombre de threads pour la parallelisation
-# 8 est un bon compromis : I/O-bound, pas besoin de plus que les cores
+# Nombre de threads
 THREAD_WORKERS = 8
+
+# ──────────────────────────────────────────────────────────────────────────────
+# WHITELIST — fichiers et chemins à ne JAMAIS analyser
+#
+# Ces fichiers génèrent massivement de faux positifs car ils contiennent
+# des signatures binaires, des définitions MIME, ou du code stdlib légitime
+# qui ressemble superficiellement à des patterns suspects.
+#
+# Catégories :
+#   1. Bases de données MIME/Magic — contiennent des signatures de fichiers
+#      (bytes magiques) qui ressemblent à des payloads
+#   2. Bibliothèques Python stdlib — contiennent le mot "password" dans
+#      urllib, http.client... mais ce sont des noms de paramètres, pas des secrets
+#   3. Caches navigateur dans /tmp — Chrome/Chromium crée des caches
+#      temporaires légitimes (WebGPU, réseau, certificats...)
+#   4. Fichiers de définition GnuPG/Crypto — contiennent des clés exemples
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Préfixes de chemins à exclure entièrement de l'analyse de contenu
+# (on vérifie quand même les permissions, mais pas le contenu)
+SKIP_CONTENT_PATH_PREFIXES = (
+    "/usr/share/mime/",          # définitions MIME (faux positifs "private key")
+    "/usr/lib/file/",            # magic database
+    "/usr/share/file/",          # magic database
+    "/usr/lib/python",           # Python stdlib (urllib, http... contiennent "password")
+    "/usr/lib/python2",          # Python 2 legacy
+    "/usr/lib/python3",          # Python 3
+    "/usr/local/lib/python",     # Python local
+    "/usr/share/doc/",           # documentation
+    "/usr/share/man/",           # man pages
+    "/usr/share/locale/",        # traductions
+    "/usr/share/gnupg/",         # GnuPG exemples
+    "/usr/share/ca-certificates/",# certificats système
+)
+
+# Suffixes de fichiers à exclure de l'analyse de contenu
+SKIP_CONTENT_EXTENSIONS = {
+    ".mgc",   # magic compiled database
+    ".xml",   # définitions XML (MIME, GConf...)
+    ".po",    # fichiers de traduction
+    ".mo",    # traductions compilées
+    ".pyc",   # bytecode Python compilé (faux positifs constants)
+    ".pyo",   # optimized bytecode
+}
+
+# Noms de fichiers Chrome/Chromium dans /tmp — comportement normal du navigateur
+# Chrome crée des dossiers temporaires dans /tmp pour son cache, ses composants...
+CHROMIUM_TEMP_PATTERNS = (
+    ".org.chromium.", ".org.chromium", "chromium",
+    "chrome_", "google-chrome",
+    "CrashpadMetrics", "crashpad",
+    "DawnWebGPU", "GraphiteDawn", "ShaderCache",
+    "Network Persistent State", "shared_proto_db",
+    "CertificateRevocation", "component_crx_cache",
+    "chrome_debug.log",
+)
 
 
 # ──────────────────────────────────────────────
@@ -212,6 +266,20 @@ def _analyze_file(
     if size_bytes == 0 or size_bytes > 50 * 1024 * 1024:
         return None
 
+    path_str = str(path)
+    suffix   = path.suffix.lower()   # défini ici pour les whitelists ci-dessous
+
+    # Skip les caches Chromium dans /tmp — comportement normal du navigateur
+    if any(pat in path_str for pat in CHROMIUM_TEMP_PATTERNS):
+        return None
+
+    # Flag pour désactiver l'analyse de contenu sur certains chemins/extensions
+    # (on garde les checks de permissions, pas le scan de contenu)
+    skip_content_scan = (
+        path_str.startswith(SKIP_CONTENT_PATH_PREFIXES) or
+        suffix in SKIP_CONTENT_EXTENSIONS
+    )
+
     reasons:  list[str] = []
     severity: str = "LOW"
     details:  dict = {"size_bytes": size_bytes}
@@ -232,7 +300,6 @@ def _analyze_file(
             severity = _escalate(severity, "HIGH")
 
     # ── 3. Extension dangereuse ─────────────────────────────────────
-    suffix = path.suffix.lower()
     if suffix in dangerous_ext:
         reasons.append(f"Dangerous extension: {suffix}")
         severity = _escalate(severity, "MEDIUM")
@@ -264,7 +331,9 @@ def _analyze_file(
         severity = _escalate(severity, "MEDIUM")
 
     # ── 7. Analyse de contenu (YARA-like) ───────────────────────────
-    if size_bytes > 0:
+    # Ignorée pour les fichiers système (mime, magic, python stdlib...)
+    # qui génèrent des faux positifs massifs.
+    if size_bytes > 0 and not skip_content_scan:
         matched = _scan_content(path)
         if matched:
             details["matched_patterns"] = [m[0] for m in matched]
